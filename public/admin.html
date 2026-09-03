@@ -2,174 +2,483 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>PinkTree Voice Agent — Admin</title>
 <style>
-  * { box-sizing: border-box; }
-  body { font-family: -apple-system, sans-serif; max-width: 860px; margin: 30px auto; padding: 0 16px; color: #222; }
-  h1 { font-size: 18px; margin-bottom: 4px; }
-  .sub { color: #888; font-size: 13px; margin-bottom: 20px; }
+  :root {
+    --pink: #EC1876;
+    --pink-dark: #C41262;
+    --pink-tint: #FDEFF5;
+    --pink-tint-2: #FBDCEA;
+    --black: #17151A;
+    --ink: #211E26;
+    --ink-soft: #6E6A76;
+    --line: #ECE8ED;
+    --line-strong: #DED8E1;
+    --white: #FFFFFF;
+    --success-bg: #E4F6EA;
+    --success-text: #1D7A3E;
+    --danger-bg: #FBE4E9;
+    --danger-text: #B21E42;
+    --radius: 10px;
+    --sidebar-w: 232px;
+  }
 
-  .tabs { display: flex; gap: 4px; border-bottom: 1px solid #ddd; margin-bottom: 16px; }
-  .tab { padding: 8px 14px; cursor: pointer; font-size: 14px; color: #666; border-bottom: 2px solid transparent; }
-  .tab.active { color: #063; border-bottom-color: #063; font-weight: 600; }
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--white);
+    display: flex;
+    min-height: 100vh;
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
+    background: var(--black);
+    color: #EDEAF0;
+    display: flex;
+    flex-direction: column;
+    padding: 22px 14px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 10px 22px;
+  }
+
+  .brand .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    background: var(--pink);
+    flex-shrink: 0;
+  }
+
+  .brand .name {
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: #FFFFFF;
+  }
+
+  .brand .name span {
+    display: block;
+    font-size: 11px;
+    font-weight: 400;
+    color: #97919F;
+    margin-top: 1px;
+  }
+
+  nav.navlist {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 6px;
+  }
+
+  .navitem {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    color: #C6C1CC;
+    cursor: pointer;
+    user-select: none;
+    border-left: 2px solid transparent;
+  }
+
+  .navitem svg { flex-shrink: 0; opacity: 0.8; }
+
+  .navitem:hover {
+    background: rgba(255,255,255,0.06);
+    color: #FFFFFF;
+  }
+
+  .navitem.active {
+    background: rgba(236, 24, 118, 0.16);
+    color: #FFFFFF;
+    font-weight: 600;
+  }
+
+  .navitem.active svg { opacity: 1; }
+
+  .sidebar-foot {
+    margin-top: auto;
+    padding: 12px 12px 4px;
+    font-size: 11px;
+    color: #726C7B;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    padding-top: 14px;
+  }
+
+  /* ---------- Main ---------- */
+  main {
+    flex: 1;
+    min-width: 0;
+    padding: 32px 40px 60px;
+    max-width: 980px;
+  }
+
+  .pagehead { margin-bottom: 24px; }
+  .pagehead h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .pagehead .sub { color: var(--ink-soft); font-size: 13.5px; }
+
   .panel { display: none; }
   .panel.active { display: block; }
 
-  /* Voice tab */
-  #voiceChat, #textChat { border: 1px solid #ddd; border-radius: 8px; padding: 12px; height: 360px; overflow-y: auto; margin-bottom: 12px; background: #fafafa; }
-  .msg { margin: 8px 0; line-height: 1.4; font-size: 14px; }
-  .agent b { color: #063; }
-  .caller b { color: #06c; }
-  .status { color: #999; font-style: italic; }
+  /* Voice / text chat */
+  #voiceChat, #textChat {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    height: 380px;
+    overflow-y: auto;
+    margin-bottom: 14px;
+    background: #FBFAFC;
+  }
+  .msg { margin: 9px 0; line-height: 1.5; font-size: 14px; }
+  .agent b { color: var(--pink-dark); }
+  .caller b { color: var(--ink); }
+  .status { color: var(--ink-soft); font-style: italic; }
 
-  #recordBtn { width: 100%; padding: 16px; font-size: 15px; font-weight: 600; border-radius: 8px; border: none; cursor: pointer; background: #063; color: white; }
-  #recordBtn.recording { background: #c33; }
-  #recordBtn:disabled { background: #ccc; cursor: not-allowed; }
-  .hint { text-align: center; color: #999; font-size: 12px; margin-top: 8px; }
+  #recordBtn {
+    width: 100%;
+    padding: 16px;
+    font-size: 15px;
+    font-weight: 600;
+    border-radius: var(--radius);
+    border: none;
+    cursor: pointer;
+    background: var(--pink);
+    color: white;
+    transition: background 0.15s ease;
+  }
+  #recordBtn:hover:not(:disabled) { background: var(--pink-dark); }
+  #recordBtn.recording { background: var(--danger-text); }
+  #recordBtn:disabled { background: #E5E1E8; color: #A6A0AC; cursor: not-allowed; }
+  .hint { text-align: center; color: var(--ink-soft); font-size: 12px; margin-top: 10px; }
 
   /* Text tab */
   #textForm { display: flex; gap: 8px; }
-  #textInput { flex: 1; padding: 10px; font-size: 14px; }
-  #textForm button { padding: 10px 16px; font-size: 14px; cursor: pointer; }
+  #textInput {
+    flex: 1;
+    padding: 11px 14px;
+    font-size: 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    font-family: inherit;
+  }
+  #textInput:focus { outline: none; border-color: var(--pink); }
+  #textForm button {
+    padding: 10px 18px;
+    font-size: 14px;
+    cursor: pointer;
+    background: var(--black);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+  #textForm button:hover { background: var(--pink-dark); }
 
-  /* Logs / DNC tabs */
+  /* Tables (Logs / DNC / Contacts) */
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
-  th { color: #888; font-weight: 600; }
-  .outcome { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #eee; }
-  .outcome.booked_demo { background: #d4f7d4; }
-  .outcome.do_not_call, .outcome.not_interested { background: #fddede; }
-  #dncForm { display: flex; gap: 8px; margin-bottom: 16px; }
-  #dncForm input { padding: 8px; font-size: 13px; }
+  th, td { text-align: left; padding: 10px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--ink-soft); font-weight: 600; font-size: 12px; text-transform: none; }
+  tbody tr:hover { background: #FCFAFC; }
+
+  .outcome { display: inline-block; padding: 3px 8px; border-radius: 5px; font-size: 11px; background: #F1EEF3; color: var(--ink-soft); font-weight: 600; }
+  .outcome.booked_demo { background: var(--success-bg); color: var(--success-text); }
+  .outcome.do_not_call, .outcome.not_interested { background: var(--danger-bg); color: var(--danger-text); }
+
+  #dncForm { display: flex; gap: 8px; margin-bottom: 18px; }
+  #dncForm input {
+    padding: 9px 12px;
+    font-size: 13px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    font-family: inherit;
+  }
+  #dncForm input:focus { outline: none; border-color: var(--pink); }
   #dncForm input[name=to] { flex: 1; }
   #dncForm input[name=reason] { flex: 2; }
-  .refresh { font-size: 12px; color: #888; cursor: pointer; text-decoration: underline; float: right; }
-  .empty { color: #aaa; font-size: 13px; padding: 12px 0; }
+  #dncForm button {
+    padding: 9px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    background: var(--pink);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+  #dncForm button:hover { background: var(--pink-dark); }
+
+  .toolbar { display: flex; justify-content: flex-end; gap: 14px; margin-bottom: 12px; }
+  .refresh, .clear-link {
+    font-size: 12.5px;
+    cursor: pointer;
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .refresh { color: var(--ink-soft); }
+  .refresh:hover { color: var(--ink); }
+  .clear-link { color: var(--danger-text); }
+  .clear-link:hover { text-decoration: underline; }
+
+  .empty { color: #B0AAB6; font-size: 13px; padding: 24px 0; text-align: center; }
 
   /* Script tab */
-  #scriptEditor { width: 100%; height: 380px; font-family: ui-monospace, monospace; font-size: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; resize: vertical; }
-  .scriptActions { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
-  .scriptActions button { padding: 8px 14px; font-size: 13px; cursor: pointer; }
-  #scriptSaveBtn { background: #063; color: white; border: none; border-radius: 6px; }
-  #scriptResetBtn { background: none; border: 1px solid #ccc; border-radius: 6px; }
-  #scriptStatus { font-size: 12px; color: #888; }
+  #scriptEditor {
+    width: 100%;
+    height: 420px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+    line-height: 1.6;
+    padding: 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+    resize: vertical;
+    background: #FBFAFC;
+  }
+  #scriptEditor:focus { outline: none; border-color: var(--pink); }
+  .scriptActions { display: flex; gap: 10px; margin-top: 12px; align-items: center; }
+  .scriptActions button { padding: 9px 16px; font-size: 13px; cursor: pointer; border-radius: 8px; font-weight: 600; }
+  #scriptSaveBtn { background: var(--pink); color: white; border: none; }
+  #scriptSaveBtn:hover { background: var(--pink-dark); }
+  #scriptResetBtn { background: none; border: 1px solid var(--line-strong); color: var(--ink); }
+  #scriptResetBtn:hover { border-color: var(--ink-soft); }
+  #scriptStatus { font-size: 12px; color: var(--ink-soft); }
 
   /* Contacts tab */
-  #importRow { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
-  #importRow button { padding: 8px 14px; font-size: 13px; cursor: pointer; }
-  .call-btn { padding: 4px 10px; font-size: 12px; cursor: pointer; background: #063; color: white; border: none; border-radius: 4px; }
-  .call-btn:disabled { background: #ccc; cursor: not-allowed; }
-  .clear-link { font-size: 12px; color: #c33; cursor: pointer; text-decoration: underline; }
+  #importRow { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+  #importRow input[type=file] { font-size: 13px; }
+  #importRow button {
+    padding: 9px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    background: var(--black);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+  #importRow button:hover { background: var(--pink-dark); }
+  .call-btn {
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    background: var(--pink);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+  }
+  .call-btn:hover:not(:disabled) { background: var(--pink-dark); }
+  .call-btn:disabled { background: #E5E1E8; color: #A6A0AC; cursor: not-allowed; }
 
   /* Analytics tab */
-  .statGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
-  .statCard { border: 1px solid #eee; border-radius: 8px; padding: 12px; text-align: center; }
-  .statCard .num { font-size: 22px; font-weight: 700; color: #063; }
-  .statCard .label { font-size: 11px; color: #888; margin-top: 4px; }
-  .barRow { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
-  .barRow .barLabel { width: 130px; flex-shrink: 0; color: #555; }
-  .barRow .barTrack { flex: 1; background: #f0f0f0; border-radius: 4px; overflow: hidden; height: 16px; }
-  .barRow .barFill { height: 100%; background: #063; }
-  .barRow .barCount { width: 30px; text-align: right; color: #888; }
-  h3.sectionTitle { font-size: 13px; color: #555; margin: 20px 0 8px; }
+  .statGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 28px; }
+  .statCard {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px;
+    text-align: left;
+    background: #FBFAFC;
+  }
+  .statCard .num { font-size: 24px; font-weight: 700; color: var(--pink-dark); letter-spacing: -0.01em; }
+  .statCard .label { font-size: 12px; color: var(--ink-soft); margin-top: 4px; }
+
+  .barRow { display: flex; align-items: center; gap: 10px; margin: 8px 0; font-size: 12.5px; }
+  .barRow .barLabel { width: 140px; flex-shrink: 0; color: var(--ink); }
+  .barRow .barTrack { flex: 1; background: #F1EEF3; border-radius: 5px; overflow: hidden; height: 14px; }
+  .barRow .barFill { height: 100%; background: var(--pink); }
+  .barRow .barCount { width: 32px; text-align: right; color: var(--ink-soft); }
+  h3.sectionTitle { font-size: 13px; font-weight: 700; color: var(--ink); margin: 24px 0 10px; }
+
+  @media (max-width: 800px) {
+    body { flex-direction: column; }
+    .sidebar { width: 100%; height: auto; position: relative; flex-direction: row; overflow-x: auto; padding: 12px; }
+    .brand { display: none; }
+    nav.navlist { flex-direction: row; }
+    .sidebar-foot { display: none; }
+    main { padding: 20px; }
+    .statGrid { grid-template-columns: repeat(2, 1fr); }
+  }
 </style>
 </head>
 <body>
-  <h1>PinkTree Voice Agent — Admin</h1>
-  <div class="sub">Test the sales script and review call activity — nothing here dials a real number.</div>
 
-  <div class="tabs">
-    <div class="tab active" data-tab="voice">Voice Test</div>
-    <div class="tab" data-tab="text">Text Test</div>
-    <div class="tab" data-tab="script">Script</div>
-    <div class="tab" data-tab="contacts">Contacts</div>
-    <div class="tab" data-tab="logs">Call Logs</div>
-    <div class="tab" data-tab="dnc">Do-Not-Call</div>
-    <div class="tab" data-tab="analytics">Analytics</div>
-  </div>
-
-  <!-- Voice Test -->
-  <div class="panel active" id="panel-voice">
-    <div id="voiceChat"></div>
-    <button id="recordBtn">Hold to talk</button>
-    <div class="hint">Press and hold, speak your reply, release when done.</div>
-  </div>
-
-  <!-- Text Test -->
-  <div class="panel" id="panel-text">
-    <div id="textChat"></div>
-    <form id="textForm">
-      <input id="textInput" autocomplete="off" placeholder="Type your reply as the callee..." />
-      <button type="submit">Send</button>
-    </form>
-  </div>
-
-  <!-- Script -->
-  <div class="panel" id="panel-script">
-    <textarea id="scriptEditor" spellcheck="false"></textarea>
-    <div class="scriptActions">
-      <button id="scriptSaveBtn">Save</button>
-      <button id="scriptResetBtn" type="button">Reset to default</button>
-      <span id="scriptStatus"></span>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="dot"></div>
+      <div class="name">PinkTree<span>Voice Agent Admin</span></div>
     </div>
-  </div>
+    <nav class="navlist">
+      <div class="navitem active" data-tab="voice">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4"/></svg>
+        Voice Test
+      </div>
+      <div class="navitem" data-tab="text">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Text Test
+      </div>
+      <div class="navitem" data-tab="script">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        Script
+      </div>
+      <div class="navitem" data-tab="contacts">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Contacts
+      </div>
+      <div class="navitem" data-tab="logs">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        Call Logs
+      </div>
+      <div class="navitem" data-tab="dnc">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M4.93 4.93l14.14 14.14"/></svg>
+        Do-Not-Call
+      </div>
+      <div class="navitem" data-tab="analytics">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg>
+        Analytics
+      </div>
+    </nav>
+    <div class="sidebar-foot">Nothing here dials a real number.</div>
+  </aside>
 
-  <!-- Contacts -->
-  <div class="panel" id="panel-contacts">
-    <div id="importRow">
-      <input type="file" id="importFile" accept=".csv,.xlsx,.xls" />
-      <button id="importBtn">Import</button>
-      <span id="importStatus" style="font-size:12px; color:#888;"></span>
+  <main>
+    <!-- Voice Test -->
+    <div class="panel active" id="panel-voice">
+      <div class="pagehead">
+        <h1>Voice Test</h1>
+        <div class="sub">Try the sales script out loud, as if you were the callee.</div>
+      </div>
+      <div id="voiceChat"></div>
+      <button id="recordBtn">Hold to talk</button>
+      <div class="hint">Press and hold, speak your reply, release when done.</div>
     </div>
-    <span class="refresh" onclick="loadContacts()">refresh</span>
-    <span class="clear-link" onclick="clearContacts()">clear all</span>
-    <table id="contactsTable">
-      <thead><tr><th>Phone</th><th>Name</th><th>Company</th><th>Called</th><th>Last outcome</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="empty" id="contactsEmpty" style="display:none;">No contacts imported yet. CSV/XLSX needs a phone/number column.</div>
-  </div>
 
-  <!-- Call Logs -->
-  <div class="panel" id="panel-logs">
-    <span class="refresh" onclick="loadLogs()">refresh</span>
-    <table id="logsTable">
-      <thead><tr><th>Time</th><th>Event</th><th>To</th><th>Outcome</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="empty" id="logsEmpty" style="display:none;">No call events yet.</div>
-  </div>
+    <!-- Text Test -->
+    <div class="panel" id="panel-text">
+      <div class="pagehead">
+        <h1>Text Test</h1>
+        <div class="sub">Run the same conversation flow as typed messages.</div>
+      </div>
+      <div id="textChat"></div>
+      <form id="textForm">
+        <input id="textInput" autocomplete="off" placeholder="Type your reply as the callee..." />
+        <button type="submit">Send</button>
+      </form>
+    </div>
 
-  <!-- DNC -->
-  <div class="panel" id="panel-dnc">
-    <form id="dncForm">
-      <input name="to" placeholder="+15551234567" required />
-      <input name="reason" placeholder="reason (optional)" />
-      <button type="submit">Add</button>
-    </form>
-    <span class="refresh" onclick="loadDnc()">refresh</span>
-    <table id="dncTable">
-      <thead><tr><th>Number</th><th>Reason</th><th>Added</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="empty" id="dncEmpty" style="display:none;">No numbers on the list yet.</div>
-  </div>
+    <!-- Script -->
+    <div class="panel" id="panel-script">
+      <div class="pagehead">
+        <h1>Script</h1>
+        <div class="sub">Edit the agent's prompt. Changes apply to the next call.</div>
+      </div>
+      <textarea id="scriptEditor" spellcheck="false"></textarea>
+      <div class="scriptActions">
+        <button id="scriptSaveBtn">Save</button>
+        <button id="scriptResetBtn" type="button">Reset to default</button>
+        <span id="scriptStatus"></span>
+      </div>
+    </div>
 
-  <!-- Analytics -->
-  <div class="panel" id="panel-analytics">
-    <span class="refresh" onclick="loadAnalytics()">refresh</span>
-    <div class="statGrid" id="statGrid"></div>
-    <h3 class="sectionTitle">Outcomes</h3>
-    <div id="outcomeBars"></div>
-    <h3 class="sectionTitle">Calls per day (last 14 days)</h3>
-    <div id="dayBars"></div>
-  </div>
+    <!-- Contacts -->
+    <div class="panel" id="panel-contacts">
+      <div class="pagehead">
+        <h1>Contacts</h1>
+        <div class="sub">Import a list and place calls one at a time.</div>
+      </div>
+      <div id="importRow">
+        <input type="file" id="importFile" accept=".csv,.xlsx,.xls" />
+        <button id="importBtn">Import</button>
+        <span id="importStatus" style="font-size:12px; color:var(--ink-soft);"></span>
+      </div>
+      <div class="toolbar">
+        <span class="refresh" onclick="loadContacts()">Refresh</span>
+        <span class="clear-link" onclick="clearContacts()">Clear all</span>
+      </div>
+      <table id="contactsTable">
+        <thead><tr><th>Phone</th><th>Name</th><th>Company</th><th>Called</th><th>Last outcome</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty" id="contactsEmpty" style="display:none;">No contacts imported yet. CSV/XLSX needs a phone/number column.</div>
+    </div>
+
+    <!-- Call Logs -->
+    <div class="panel" id="panel-logs">
+      <div class="pagehead">
+        <h1>Call Logs</h1>
+        <div class="sub">Every call event, most recent first.</div>
+      </div>
+      <div class="toolbar">
+        <span class="refresh" onclick="loadLogs()">Refresh</span>
+      </div>
+      <table id="logsTable">
+        <thead><tr><th>Time</th><th>Event</th><th>To</th><th>Outcome</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty" id="logsEmpty" style="display:none;">No call events yet.</div>
+    </div>
+
+    <!-- DNC -->
+    <div class="panel" id="panel-dnc">
+      <div class="pagehead">
+        <h1>Do-Not-Call</h1>
+        <div class="sub">Numbers the agent will never dial.</div>
+      </div>
+      <form id="dncForm">
+        <input name="to" placeholder="+15551234567" required />
+        <input name="reason" placeholder="reason (optional)" />
+        <button type="submit">Add</button>
+      </form>
+      <div class="toolbar">
+        <span class="refresh" onclick="loadDnc()">Refresh</span>
+      </div>
+      <table id="dncTable">
+        <thead><tr><th>Number</th><th>Reason</th><th>Added</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="empty" id="dncEmpty" style="display:none;">No numbers on the list yet.</div>
+    </div>
+
+    <!-- Analytics -->
+    <div class="panel" id="panel-analytics">
+      <div class="pagehead">
+        <h1>Analytics</h1>
+        <div class="sub">How the agent's calls are going.</div>
+      </div>
+      <div class="toolbar">
+        <span class="refresh" onclick="loadAnalytics()">Refresh</span>
+      </div>
+      <div class="statGrid" id="statGrid"></div>
+      <h3 class="sectionTitle">Outcomes</h3>
+      <div id="outcomeBars"></div>
+      <h3 class="sectionTitle">Calls per day (last 14 days)</h3>
+      <div id="dayBars"></div>
+    </div>
+  </main>
 
 <script>
-  // ---- Tabs ----
-  document.querySelectorAll('.tab').forEach((tab) => {
+  // ---- Nav (formerly tabs) ----
+  document.querySelectorAll('.navitem').forEach((tab) => {
     tab.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.navitem').forEach((t) => t.classList.remove('active'));
       document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
       tab.classList.add('active');
       document.getElementById('panel-' + tab.dataset.tab).classList.add('active');

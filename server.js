@@ -185,6 +185,149 @@ async function callLLM({ system, messages, maxTokens = 200 }) {
   return data.choices?.[0]?.message?.content?.trim() || '';
 }
 
+// Streaming variant, used only by live calls. Reads OpenRouter's SSE stream
+// token-by-token and fires onSentence() as soon as each complete sentence
+// appears - the caller (CallSession) starts TTS on sentence 1 immediately
+// instead of waiting for the model to finish the whole reply. This is the
+// single biggest latency win available here: time-to-first-audio drops from
+// "however long the full reply takes to generate" to "however long the
+// first sentence takes."
+async function callLLMStream({ system, messages, maxTokens = 200, onSentence }) {
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': PUBLIC_HOSTNAME ? `https://${PUBLIC_HOSTNAME}` : 'http://localhost',
+      'X-Title': 'PinkTree Voice Agent',
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      max_tokens: maxTokens,
+      stream: true,
+      messages: [{ role: 'system', content: system }, ...messages],
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`OpenRouter error ${res.status}: ${errText}`);
+  }
+
+  let lineBuffer = '';     // raw SSE bytes that haven't formed a full line yet
+  let sentenceBuffer = ''; // model text not yet flushed as a complete sentence
+  let fullText = '';
+
+  // Pulls one complete sentence off the front of sentenceBuffer, if there is
+  // one. `force` flushes whatever's left even without terminal punctuation -
+  // used once at the end of the stream so a reply with no trailing "." still
+  // gets spoken.
+  function flushSentence(force = false) {
+    const match = sentenceBuffer.match(/^(.*?[.!?])(\s+|$)/);
+    if (match) {
+      sentenceBuffer = sentenceBuffer.slice(match[0].length);
+      const sentence = match[1].trim();
+      if (sentence) onSentence(sentence);
+      return true;
+    }
+    if (force && sentenceBuffer.trim()) {
+      onSentence(sentenceBuffer.trim());
+      sentenceBuffer = '';
+    }
+    return false;
+  }
+
+  for await (const chunk of res.body) {
+    lineBuffer += chunk.toString('utf-8');
+    const lines = lineBuffer.split('\n');
+    lineBuffer = lines.pop(); // last line may be incomplete - keep for next chunk
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const payload = trimmed.slice(5).trim();
+      if (payload === '[DONE]') continue;
+      try {
+        const json = JSON.parse(payload);
+        const delta = json.choices?.[0]?.delta?.content;
+        if (delta) {
+          sentenceBuffer += delta;
+          fullText += delta;
+          while (flushSentence()) {} // flush every sentence that's now complete
+        }
+      } catch {
+        // A single SSE chunk occasionally splits mid-JSON across network
+        // reads - the remainder completes it on the next chunk, safe to skip.
+      }
+    }
+  }
+  flushSentence(true);
+  return fullText.trim();
+}
+
+// Raw mu-law/8kHz synthesis (no streaming) - the shared primitive behind
+// backchannel clips, fallback clips, and prefetched sentence audio during
+// live calls. All three want the same encoding, just at different times.
+async function synthesizeSpeechMulaw(text) {
+  const res = await fetch(
+    `https://api.deepgram.com/v1/speak?model=${AURA_MODEL}&encoding=mulaw&sample_rate=8000&container=none`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Token ${DEEPGRAM_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    }
+  );
+  if (!res.ok) throw new Error(`Aura TTS failed: ${res.status}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+// ---- Backchanneling ---------------------------------------------------
+// Short acknowledgment clips ("mm-hmm", "got it") pre-generated once at
+// startup and cached in memory as raw mu-law audio. Playing one immediately
+// when the caller finishes talking - before the LLM has even responded -
+// fills the silence naturally and masks LLM/TTS latency, the same way a
+// human on a call says "mm-hmm" while thinking of what to say next.
+const BACKCHANNEL_PHRASES = ['Mm-hmm.', 'I see.', 'Got it.', 'Right.', 'Okay.'];
+let backchannelClips = [];
+
+async function ensureBackchannelClips() {
+  const buffers = [];
+  for (const phrase of BACKCHANNEL_PHRASES) {
+    try {
+      buffers.push(await synthesizeSpeechMulaw(phrase));
+    } catch (err) {
+      console.error(`Backchannel clip "${phrase}" failed to generate:`, err.message);
+    }
+  }
+  backchannelClips = buffers;
+  console.log(`Generated ${buffers.length}/${BACKCHANNEL_PHRASES.length} backchannel clips`);
+}
+
+// ---- Fallback clips for LLM failures -----------------------------------
+// Pre-generated so the error path itself doesn't need a TTS round-trip -
+// something's already gone wrong at that point, no reason to add more
+// latency (or a second failure point) on top of it.
+const FALLBACK_TEXT = {
+  retry: "Sorry, I didn't quite catch that - could you say that again?",
+  giveUp: "Sorry, I'm having trouble with the line. I'll follow up by email instead. Thanks for your time.",
+};
+let fallbackClips = {};
+
+async function ensureFallbackClips() {
+  for (const [key, text] of Object.entries(FALLBACK_TEXT)) {
+    try {
+      fallbackClips[key] = await synthesizeSpeechMulaw(text);
+    } catch (err) {
+      console.error(`Fallback clip "${key}" failed to generate:`, err.message);
+    }
+  }
+}
+
+// ~150ms of silence between sentences (G.711 mu-law silence = byte 0xFF) so
+// back-to-back sentences sound like natural speech cadence instead of one
+// continuous run-on blob.
+const SENTENCE_PAUSE_SAMPLES = Math.round(8000 * 0.15);
+
 // Tracks calls currently in the live Media Stream loop, so /call can refuse
 // new dials once at capacity instead of overwhelming the STT/LLM/TTS APIs.
 const activeCallSids = new Set();
@@ -682,6 +825,16 @@ ensureVoicemailAudio().catch((err) => {
   console.error('Voicemail audio generation failed (continuing without it):', err.message);
 });
 
+// Same reasoning as voicemail - backchanneling is a nice-to-have, never
+// worth crash-looping the service over.
+ensureBackchannelClips().catch((err) => {
+  console.error('Backchannel clip generation failed (continuing without it):', err.message);
+});
+
+ensureFallbackClips().catch((err) => {
+  console.error('Fallback clip generation failed (continuing without it):', err.message);
+});
+
 server.listen(PORT, () => console.log(`Listening on :${PORT}`));
 
 // =============================================================================
@@ -697,6 +850,9 @@ class CallSession {
     this.history = []; // Anthropic message history: [{role, content}]
     this.speaking = false; // true while our TTS audio is playing out to the caller
     this.finalTranscriptBuffer = '';
+    // Set on barge-in - lets a whole turn's queued sentences be cancelled,
+    // not just whatever sentence happens to be mid-playback right now.
+    this.turnCancelled = false;
 
     this.setupDeepgram();
     this.setupTwilioHandlers();
@@ -712,31 +868,46 @@ class CallSession {
       channels: 1,
       smart_format: true,
       interim_results: true,
-      endpointing: 300, // ms of silence before a final transcript is emitted
+      endpointing: 300, // ms of silence before Deepgram finalizes each transcript chunk
       vad_events: true, // gives us SpeechStarted events for barge-in
+      // utterance_end_ms drives the UtteranceEnd event below, which is a
+      // more reliable "the caller is actually done talking" signal than
+      // endpointing/speech_final alone - endpointing can fire on a brief
+      // mid-thought pause ("I need... to check my calendar") and cut the
+      // caller off. UtteranceEnd waits for a longer, more confident gap.
+      utterance_end_ms: 1000,
     });
 
     this.dgConnection.on(LiveTranscriptionEvents.Open, () => {
       console.log('Deepgram connection open');
     });
 
-    // Barge-in: caller started talking while we're still playing TTS audio
+    // Barge-in: caller started talking while we're still playing TTS audio.
+    // Small debounce (imperceptible to a human, ~150ms) so a brief noise
+    // blip - a cough, a stray "uh" - doesn't cut the agent off; a real
+    // interruption easily clears this bar.
     this.dgConnection.on(LiveTranscriptionEvents.SpeechStarted, () => {
-      if (this.speaking) this.interrupt();
+      if (!this.speaking) return;
+      clearTimeout(this.bargeInTimer);
+      this.bargeInTimer = setTimeout(() => {
+        if (this.speaking) this.interrupt();
+      }, 150);
     });
 
+    // Accumulate finalized transcript pieces as they arrive - actual
+    // turn-end dispatch happens on UtteranceEnd below, not here.
     this.dgConnection.on(LiveTranscriptionEvents.Transcript, (data) => {
       const transcript = data.channel?.alternatives?.[0]?.transcript;
       if (!transcript) return;
-
       if (data.is_final) {
         this.finalTranscriptBuffer += ` ${transcript}`;
-        if (data.speech_final) {
-          const utterance = this.finalTranscriptBuffer.trim();
-          this.finalTranscriptBuffer = '';
-          if (utterance) this.handleUserUtterance(utterance);
-        }
       }
+    });
+
+    this.dgConnection.on(LiveTranscriptionEvents.UtteranceEnd, () => {
+      const utterance = this.finalTranscriptBuffer.trim();
+      this.finalTranscriptBuffer = '';
+      if (utterance) this.handleUserUtterance(utterance);
     });
 
     this.dgConnection.on(LiveTranscriptionEvents.Error, (err) => {
@@ -768,6 +939,7 @@ class CallSession {
         case 'stop':
           console.log('Stream stopped');
           activeCallSids.delete(this.callSid);
+          clearTimeout(this.bargeInTimer);
           this.dgConnection.finish();
           this.finalizeCallLog();
           break;
@@ -777,45 +949,121 @@ class CallSession {
     this.twilioWs.on('close', () => {
       console.log('Twilio WS closed');
       activeCallSids.delete(this.callSid);
+      clearTimeout(this.bargeInTimer);
       this.dgConnection.finish();
     });
   }
 
-  // Caller finished a turn (or the call just connected) -> ask Claude what to say
+  // Caller finished a turn (or the call just connected) -> ask the LLM what
+  // to say, streaming its reply straight into TTS sentence-by-sentence.
   async handleUserUtterance(text) {
-    const userMessage =
-      text === '[CALL_CONNECTED]'
-        ? 'The call just connected. Give your opening line.'
-        : text;
+    const isOpeningLine = text === '[CALL_CONNECTED]';
+    const userMessage = isOpeningLine
+      ? 'The call just connected. Give your opening line.'
+      : text;
 
     this.history.push({ role: 'user', content: userMessage });
+    this.turnCancelled = false; // fresh turn - clear any cancellation from a prior one
+
+    // Backchanneling: fire a quick "mm-hmm"/"got it" immediately so the
+    // caller isn't met with dead air while the LLM generates - masks
+    // latency and reads as a natural acknowledgment. Skipped before the
+    // opening line, since there's nothing to acknowledge yet.
+    if (!isOpeningLine) this.playBackchannel();
+
+    // Sentences play in order via speakChain, but their TTS audio is
+    // fetched as soon as the text is ready - not when it's that sentence's
+    // turn to play. Without this, sentence 2's TTS generation wouldn't even
+    // start until sentence 1 finished playing, adding a dead-air gap
+    // between every sentence of a multi-sentence reply. The first sentence
+    // still uses true streaming playback (lowest possible time-to-first-
+    // audio); sentences after that are prefetched into a buffer in the
+    // background while the previous one plays, then played back-to-back.
+    let speakChain = Promise.resolve();
+    let fullReply = '';
+    let sentenceIndex = 0;
+    const onSentence = (sentence) => {
+      fullReply += (fullReply ? ' ' : '') + sentence;
+      const isFirst = sentenceIndex === 0;
+      sentenceIndex++;
+
+      if (isFirst) {
+        speakChain = speakChain.then(() => {
+          if (this.turnCancelled) return;
+          return this.speakStreaming(sentence);
+        });
+      } else {
+        // Kick the fetch off now, in parallel with whatever's currently
+        // playing - by the time speakChain reaches this sentence, the
+        // audio is likely already sitting in memory ready to play.
+        const audioPromise = this.fetchSentenceAudio(sentence).catch((err) => {
+          console.error('Sentence TTS prefetch failed:', err);
+          return null;
+        });
+        speakChain = speakChain.then(async () => {
+          if (this.turnCancelled) return;
+          const buffer = await audioPromise;
+          if (buffer) await this.playBuffer(buffer);
+        });
+      }
+    };
 
     try {
-      const replyText = await callLLM({
+      await callLLMStream({
         system: systemPrompt,
         messages: this.history,
         maxTokens: 200,
+        onSentence,
       });
+      await speakChain;
 
-      this.history.push({ role: 'assistant', content: replyText });
+      if (fullReply) {
+        this.history.push({ role: 'assistant', content: fullReply });
+      }
       this.consecutiveErrors = 0;
-      await this.speak(replyText);
     } catch (err) {
       console.error('LLM error:', err);
       // Don't leave the caller in dead silence - say something and let them
-      // continue, rather than the call appearing to have dropped.
+      // continue, rather than the call appearing to have dropped. These use
+      // pre-cached audio (no TTS round-trip) since something's already
+      // gone wrong and a slow fallback would compound it.
       this.consecutiveErrors = (this.consecutiveErrors || 0) + 1;
-      if (this.consecutiveErrors <= 2) {
-        await this.speak("Sorry, I didn't quite catch that - could you say that again?");
+      const isRetry = this.consecutiveErrors <= 2;
+      const clip = isRetry ? fallbackClips.retry : fallbackClips.giveUp;
+      if (clip) {
+        await this.playBuffer(clip);
       } else {
-        // Repeated failures - end gracefully instead of looping forever.
-        await this.speak('Sorry, I\'m having trouble with the line. I\'ll follow up by email instead. Thanks for your time.');
+        // Pre-cached clip wasn't available (e.g. failed at startup) - fall
+        // back to a live TTS call rather than leaving the caller in silence.
+        try {
+          await this.playBuffer(await this.fetchSentenceAudio(FALLBACK_TEXT[isRetry ? 'retry' : 'giveUp']));
+        } catch (ttsErr) {
+          console.error('Fallback TTS also failed - caller gets silence:', ttsErr);
+        }
       }
     }
   }
 
-  // Stream Deepgram Aura TTS audio (mu-law 8kHz, matches Twilio directly) to the caller
-  async speak(text) {
+  // Play a pre-cached short acknowledgment clip (fire-and-forget, not part
+  // of the speakChain) while the real reply is still being generated.
+  playBackchannel() {
+    if (backchannelClips.length === 0 || this.turnCancelled) return;
+    const clip = backchannelClips[Math.floor(Math.random() * backchannelClips.length)];
+    this.speaking = true;
+    this.twilioWs.send(
+      JSON.stringify({
+        event: 'media',
+        streamSid: this.streamSid,
+        media: { payload: clip.toString('base64') },
+      })
+    );
+  }
+
+  // First sentence of a turn: play audio as it streams in from Aura rather
+  // than waiting for the whole clip - this is what gives the lowest
+  // possible time-to-first-audio for the turn.
+  async speakStreaming(text) {
+    if (this.turnCancelled) return;
     this.speaking = true;
     this.currentUtteranceInterrupted = false;
 
@@ -842,11 +1090,58 @@ class CallSession {
           })
         );
       }
+      if (!this.currentUtteranceInterrupted) this.sendPause();
     } catch (err) {
       console.error('TTS error:', err);
     } finally {
       this.speaking = false;
     }
+  }
+
+  // Fetches one sentence's full audio into memory without playing it -
+  // used to prefetch sentence N+1 while sentence N is still playing, so
+  // there's no gap waiting on a fresh TTS round-trip between sentences.
+  async fetchSentenceAudio(text) {
+    return synthesizeSpeechMulaw(text);
+  }
+
+  // Plays an already-fetched audio buffer (a prefetched sentence, a cached
+  // backchannel/fallback clip). Sliced into small frames rather than sent
+  // as one giant payload so barge-in can still cut it off promptly mid-clip.
+  async playBuffer(buffer) {
+    if (this.turnCancelled) return;
+    this.speaking = true;
+    this.currentUtteranceInterrupted = false;
+    const FRAME_BYTES = 320; // 40ms at 8kHz mu-law
+
+    try {
+      for (let i = 0; i < buffer.length; i += FRAME_BYTES) {
+        if (this.currentUtteranceInterrupted) break;
+        const frame = buffer.subarray(i, i + FRAME_BYTES);
+        this.twilioWs.send(
+          JSON.stringify({
+            event: 'media',
+            streamSid: this.streamSid,
+            media: { payload: frame.toString('base64') },
+          })
+        );
+      }
+      if (!this.currentUtteranceInterrupted) this.sendPause();
+    } finally {
+      this.speaking = false;
+    }
+  }
+
+  // Natural pause between sentences - G.711 mu-law silence is 0xFF.
+  sendPause() {
+    const silence = Buffer.alloc(SENTENCE_PAUSE_SAMPLES, 0xff);
+    this.twilioWs.send(
+      JSON.stringify({
+        event: 'media',
+        streamSid: this.streamSid,
+        media: { payload: silence.toString('base64') },
+      })
+    );
   }
 
   // Call ended -> ask Claude to tag the outcome, then write the full record.
@@ -890,9 +1185,11 @@ class CallSession {
     });
   }
 
-  // Caller started talking over the agent -> stop playback immediately
+  // Caller started talking over the agent -> stop playback immediately and
+  // cancel any remaining sentences still queued for this turn.
   interrupt() {
     this.currentUtteranceInterrupted = true;
+    this.turnCancelled = true;
     this.twilioWs.send(
       JSON.stringify({ event: 'clear', streamSid: this.streamSid })
     );

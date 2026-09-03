@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>PinkTree Voice Agent — Admin</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, sans-serif; max-width: 860px; margin: 30px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 18px; margin-bottom: 4px; }
+  .sub { color: #888; font-size: 13px; margin-bottom: 20px; }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid #ddd; margin-bottom: 16px; }
+  .tab { padding: 8px 14px; cursor: pointer; font-size: 14px; color: #666; border-bottom: 2px solid transparent; }
+  .tab.active { color: #063; border-bottom-color: #063; font-weight: 600; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* Voice tab */
+  #voiceChat, #textChat { border: 1px solid #ddd; border-radius: 8px; padding: 12px; height: 360px; overflow-y: auto; margin-bottom: 12px; background: #fafafa; }
+  .msg { margin: 8px 0; line-height: 1.4; font-size: 14px; }
+  .agent b { color: #063; }
+  .caller b { color: #06c; }
+  .status { color: #999; font-style: italic; }
+
+  #recordBtn { width: 100%; padding: 16px; font-size: 15px; font-weight: 600; border-radius: 8px; border: none; cursor: pointer; background: #063; color: white; }
+  #recordBtn.recording { background: #c33; }
+  #recordBtn:disabled { background: #ccc; cursor: not-allowed; }
+  .hint { text-align: center; color: #999; font-size: 12px; margin-top: 8px; }
+
+  /* Text tab */
+  #textForm { display: flex; gap: 8px; }
+  #textInput { flex: 1; padding: 10px; font-size: 14px; }
+  #textForm button { padding: 10px 16px; font-size: 14px; cursor: pointer; }
+
+  /* Logs / DNC tabs */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
+  th { color: #888; font-weight: 600; }
+  .outcome { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #eee; }
+  .outcome.booked_demo { background: #d4f7d4; }
+  .outcome.do_not_call, .outcome.not_interested { background: #fddede; }
+  #dncForm { display: flex; gap: 8px; margin-bottom: 16px; }
+  #dncForm input { padding: 8px; font-size: 13px; }
+  #dncForm input[name=to] { flex: 1; }
+  #dncForm input[name=reason] { flex: 2; }
+  .refresh { font-size: 12px; color: #888; cursor: pointer; text-decoration: underline; float: right; }
+  .empty { color: #aaa; font-size: 13px; padding: 12px 0; }
+
+  /* Script tab */
+  #scriptEditor { width: 100%; height: 380px; font-family: ui-monospace, monospace; font-size: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; resize: vertical; }
+  .scriptActions { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+  .scriptActions button { padding: 8px 14px; font-size: 13px; cursor: pointer; }
+  #scriptSaveBtn { background: #063; color: white; border: none; border-radius: 6px; }
+  #scriptResetBtn { background: none; border: 1px solid #ccc; border-radius: 6px; }
+  #scriptStatus { font-size: 12px; color: #888; }
+
+  /* Contacts tab */
+  #importRow { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  #importRow button { padding: 8px 14px; font-size: 13px; cursor: pointer; }
+  .call-btn { padding: 4px 10px; font-size: 12px; cursor: pointer; background: #063; color: white; border: none; border-radius: 4px; }
+  .call-btn:disabled { background: #ccc; cursor: not-allowed; }
+  .clear-link { font-size: 12px; color: #c33; cursor: pointer; text-decoration: underline; }
+
+  /* Analytics tab */
+  .statGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
+  .statCard { border: 1px solid #eee; border-radius: 8px; padding: 12px; text-align: center; }
+  .statCard .num { font-size: 22px; font-weight: 700; color: #063; }
+  .statCard .label { font-size: 11px; color: #888; margin-top: 4px; }
+  .barRow { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
+  .barRow .barLabel { width: 130px; flex-shrink: 0; color: #555; }
+  .barRow .barTrack { flex: 1; background: #f0f0f0; border-radius: 4px; overflow: hidden; height: 16px; }
+  .barRow .barFill { height: 100%; background: #063; }
+  .barRow .barCount { width: 30px; text-align: right; color: #888; }
+  h3.sectionTitle { font-size: 13px; color: #555; margin: 20px 0 8px; }
+</style>
+</head>
+<body>
+  <h1>PinkTree Voice Agent — Admin</h1>
+  <div class="sub">Test the sales script and review call activity — nothing here dials a real number.</div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="voice">Voice Test</div>
+    <div class="tab" data-tab="text">Text Test</div>
+    <div class="tab" data-tab="script">Script</div>
+    <div class="tab" data-tab="contacts">Contacts</div>
+    <div class="tab" data-tab="logs">Call Logs</div>
+    <div class="tab" data-tab="dnc">Do-Not-Call</div>
+    <div class="tab" data-tab="analytics">Analytics</div>
+  </div>
+
+  <!-- Voice Test -->
+  <div class="panel active" id="panel-voice">
+    <div id="voiceChat"></div>
+    <button id="recordBtn">Hold to talk</button>
+    <div class="hint">Press and hold, speak your reply, release when done.</div>
+  </div>
+
+  <!-- Text Test -->
+  <div class="panel" id="panel-text">
+    <div id="textChat"></div>
+    <form id="textForm">
+      <input id="textInput" autocomplete="off" placeholder="Type your reply as the callee..." />
+      <button type="submit">Send</button>
+    </form>
+  </div>
+
+  <!-- Script -->
+  <div class="panel" id="panel-script">
+    <textarea id="scriptEditor" spellcheck="false"></textarea>
+    <div class="scriptActions">
+      <button id="scriptSaveBtn">Save</button>
+      <button id="scriptResetBtn" type="button">Reset to default</button>
+      <span id="scriptStatus"></span>
+    </div>
+  </div>
+
+  <!-- Contacts -->
+  <div class="panel" id="panel-contacts">
+    <div id="importRow">
+      <input type="file" id="importFile" accept=".csv,.xlsx,.xls" />
+      <button id="importBtn">Import</button>
+      <span id="importStatus" style="font-size:12px; color:#888;"></span>
+    </div>
+    <span class="refresh" onclick="loadContacts()">refresh</span>
+    <span class="clear-link" onclick="clearContacts()">clear all</span>
+    <table id="contactsTable">
+      <thead><tr><th>Phone</th><th>Name</th><th>Company</th><th>Called</th><th>Last outcome</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty" id="contactsEmpty" style="display:none;">No contacts imported yet. CSV/XLSX needs a phone/number column.</div>
+  </div>
+
+  <!-- Call Logs -->
+  <div class="panel" id="panel-logs">
+    <span class="refresh" onclick="loadLogs()">refresh</span>
+    <table id="logsTable">
+      <thead><tr><th>Time</th><th>Event</th><th>To</th><th>Outcome</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty" id="logsEmpty" style="display:none;">No call events yet.</div>
+  </div>
+
+  <!-- DNC -->
+  <div class="panel" id="panel-dnc">
+    <form id="dncForm">
+      <input name="to" placeholder="+15551234567" required />
+      <input name="reason" placeholder="reason (optional)" />
+      <button type="submit">Add</button>
+    </form>
+    <span class="refresh" onclick="loadDnc()">refresh</span>
+    <table id="dncTable">
+      <thead><tr><th>Number</th><th>Reason</th><th>Added</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty" id="dncEmpty" style="display:none;">No numbers on the list yet.</div>
+  </div>
+
+  <!-- Analytics -->
+  <div class="panel" id="panel-analytics">
+    <span class="refresh" onclick="loadAnalytics()">refresh</span>
+    <div class="statGrid" id="statGrid"></div>
+    <h3 class="sectionTitle">Outcomes</h3>
+    <div id="outcomeBars"></div>
+    <h3 class="sectionTitle">Calls per day (last 14 days)</h3>
+    <div id="dayBars"></div>
+  </div>
+
+<script>
+  // ---- Tabs ----
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+      if (tab.dataset.tab === 'logs') loadLogs();
+      if (tab.dataset.tab === 'dnc') loadDnc();
+      if (tab.dataset.tab === 'script') loadScript();
+      if (tab.dataset.tab === 'contacts') loadContacts();
+      if (tab.dataset.tab === 'analytics') loadAnalytics();
+    });
+  });
+
+  const sessionId = 'admin-' + Math.random().toString(36).slice(2);
+
+  // ---- Voice Test ----
+  const voiceChat = document.getElementById('voiceChat');
+  const recordBtn = document.getElementById('recordBtn');
+  let mediaRecorder, audioChunks = [], voiceStarted = false;
+
+  function addVoiceMsg(role, text) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.innerHTML = role === 'status' ? '<span class="status">' + text + '</span>' : '<b>' + (role === 'agent' ? 'Agent' : 'You') + ':</b> ' + text;
+    voiceChat.appendChild(div);
+    voiceChat.scrollTop = voiceChat.scrollHeight;
+  }
+
+  function playAudio(base64) {
+    const audio = new Audio('data:audio/mpeg;base64,' + base64);
+    audio.play();
+  }
+
+  async function voiceStart() {
+    voiceChat.innerHTML = '';
+    addVoiceMsg('status', 'calling...');
+    recordBtn.disabled = true;
+    try {
+      const res = await fetch('/admin/voice-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      });
+      const data = await res.json();
+      voiceChat.innerHTML = '';
+      if (data.error) { addVoiceMsg('status', 'Error: ' + data.error); return; }
+      addVoiceMsg('agent', data.reply);
+      playAudio(data.audio);
+      voiceStarted = true;
+    } catch (err) {
+      addVoiceMsg('status', 'Error: ' + err.message);
+    } finally {
+      recordBtn.disabled = false;
+    }
+  }
+
+  async function startRecording() {
+    if (!voiceStarted) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunks = [];
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+        addVoiceMsg('caller', '(listening...)');
+        recordBtn.disabled = true;
+        try {
+          const res = await fetch('/admin/voice-chat?sessionId=' + sessionId, {
+            method: 'POST',
+            headers: { 'Content-Type': blob.type },
+            body: blob,
+          });
+          const data = await res.json();
+          voiceChat.lastChild.remove(); // remove "(listening...)"
+          if (data.error) { addVoiceMsg('status', 'Error: ' + data.error); return; }
+          addVoiceMsg('caller', data.transcript);
+          addVoiceMsg('agent', data.reply);
+          playAudio(data.audio);
+        } catch (err) {
+          addVoiceMsg('status', 'Error: ' + err.message);
+        } finally {
+          recordBtn.disabled = false;
+        }
+      };
+      mediaRecorder.start();
+      recordBtn.classList.add('recording');
+      recordBtn.textContent = 'Recording... release to send';
+    } catch (err) {
+      addVoiceMsg('status', 'Mic access error: ' + err.message);
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+    }
+    recordBtn.classList.remove('recording');
+    recordBtn.textContent = 'Hold to talk';
+  }
+
+  recordBtn.addEventListener('mousedown', startRecording);
+  recordBtn.addEventListener('mouseup', stopRecording);
+  recordBtn.addEventListener('mouseleave', () => { if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording(); });
+  recordBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+  recordBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
+
+  voiceStart();
+
+  // ---- Text Test ----
+  const textChat = document.getElementById('textChat');
+  const textForm = document.getElementById('textForm');
+  const textInput = document.getElementById('textInput');
+  const textSessionId = 'admin-text-' + Math.random().toString(36).slice(2);
+
+  function addTextMsg(role, text) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.innerHTML = '<b>' + (role === 'agent' ? 'Agent' : 'You') + ':</b> ' + text;
+    textChat.appendChild(div);
+    textChat.scrollTop = textChat.scrollHeight;
+  }
+
+  async function textStart() {
+    const res = await fetch('/test/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: textSessionId }),
+    });
+    const data = await res.json();
+    if (data.error) { addTextMsg('agent', 'Error: ' + data.error); return; }
+    addTextMsg('agent', data.reply);
+  }
+
+  textForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const message = textInput.value.trim();
+    if (!message) return;
+    addTextMsg('caller', message);
+    textInput.value = '';
+    const res = await fetch('/test/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: textSessionId, message }),
+    });
+    const data = await res.json();
+    if (data.error) { addTextMsg('agent', 'Error: ' + data.error); return; }
+    addTextMsg('agent', data.reply);
+  });
+
+  textStart();
+
+  // ---- Call Logs ----
+  async function loadLogs() {
+    const res = await fetch('/logs');
+    const events = await res.json();
+    const tbody = document.querySelector('#logsTable tbody');
+    tbody.innerHTML = '';
+    document.getElementById('logsEmpty').style.display = events.length ? 'none' : 'block';
+    events.forEach((e) => {
+      const tr = document.createElement('tr');
+      const outcomeHtml = e.outcome ? '<span class="outcome ' + e.outcome + '">' + e.outcome + '</span>' : '';
+      tr.innerHTML =
+        '<td>' + new Date(e.ts).toLocaleString() + '</td>' +
+        '<td>' + e.event + '</td>' +
+        '<td>' + (e.to || e.to_number || '') + '</td>' +
+        '<td>' + outcomeHtml + '</td>';
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ---- DNC ----
+  async function loadDnc() {
+    const res = await fetch('/dnc');
+    const entries = await res.json();
+    const tbody = document.querySelector('#dncTable tbody');
+    tbody.innerHTML = '';
+    document.getElementById('dncEmpty').style.display = entries.length ? 'none' : 'block';
+    entries.forEach((e) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + e.phone_number + '</td>' +
+        '<td>' + (e.reason || '') + '</td>' +
+        '<td>' + new Date(e.added_at).toLocaleString() + '</td>';
+      tbody.appendChild(tr);
+    });
+  }
+
+  document.getElementById('dncForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    await fetch('/dnc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: form.to.value, reason: form.reason.value }),
+    });
+    form.reset();
+    loadDnc();
+  });
+
+  // ---- Script editor ----
+  const scriptEditor = document.getElementById('scriptEditor');
+  const scriptStatus = document.getElementById('scriptStatus');
+
+  async function loadScript() {
+    const res = await fetch('/admin/script');
+    const data = await res.json();
+    scriptEditor.value = data.prompt || '';
+    scriptStatus.textContent = data.isDefault ? '(default script)' : '(edited)';
+  }
+
+  document.getElementById('scriptSaveBtn').addEventListener('click', async () => {
+    scriptStatus.textContent = 'saving...';
+    const res = await fetch('/admin/script', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: scriptEditor.value }),
+    });
+    scriptStatus.textContent = res.ok ? 'saved' : 'error saving';
+    setTimeout(() => { if (scriptStatus.textContent === 'saved') scriptStatus.textContent = '(edited)'; }, 1500);
+  });
+
+  document.getElementById('scriptResetBtn').addEventListener('click', async () => {
+    if (!confirm('Reset the script to the built-in default? This overwrites your edits.')) return;
+    const res = await fetch('/admin/script/reset', { method: 'POST' });
+    const data = await res.json();
+    scriptEditor.value = data.prompt;
+    scriptStatus.textContent = '(default script)';
+  });
+
+  // ---- Contacts ----
+  async function loadContacts() {
+    const res = await fetch('/admin/contacts');
+    const contacts = await res.json();
+    const tbody = document.querySelector('#contactsTable tbody');
+    tbody.innerHTML = '';
+    document.getElementById('contactsEmpty').style.display = contacts.length ? 'none' : 'block';
+    contacts.forEach((c) => {
+      const tr = document.createElement('tr');
+      const outcomeHtml = c.lastOutcome ? '<span class="outcome ' + c.lastOutcome + '">' + c.lastOutcome + '</span>' : '';
+      tr.innerHTML =
+        '<td>' + c.phone + '</td>' +
+        '<td>' + (c.name || '') + '</td>' +
+        '<td>' + (c.company || '') + '</td>' +
+        '<td>' + c.timesCalled + '</td>' +
+        '<td>' + outcomeHtml + '</td>' +
+        '<td><button class="call-btn" data-phone="' + c.phone + '">Call</button></td>';
+      tbody.appendChild(tr);
+    });
+  }
+
+  document.getElementById('importBtn').addEventListener('click', async () => {
+    const fileInput = document.getElementById('importFile');
+    const status = document.getElementById('importStatus');
+    if (!fileInput.files.length) { status.textContent = 'choose a file first'; return; }
+    const file = fileInput.files[0];
+    status.textContent = 'importing...';
+    try {
+      const res = await fetch('/admin/contacts/import?filename=' + encodeURIComponent(file.name), {
+        method: 'POST',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      });
+      const data = await res.json();
+      if (data.error) { status.textContent = 'Error: ' + data.error; return; }
+      status.textContent = 'added ' + data.added + ', updated ' + data.updated + ' (total ' + data.total + ')';
+      fileInput.value = '';
+      loadContacts();
+    } catch (err) {
+      status.textContent = 'Error: ' + err.message;
+    }
+  });
+
+  async function clearContacts() {
+    if (!confirm('Remove all imported contacts? This does not affect call history or the DNC list.')) return;
+    await fetch('/admin/contacts', { method: 'DELETE' });
+    loadContacts();
+  }
+
+  // Call button per contact - handles the "already called before" confirm flow
+  document.querySelector('#contactsTable tbody').addEventListener('click', async (e) => {
+    if (!e.target.classList.contains('call-btn')) return;
+    const btn = e.target;
+    const phone = btn.dataset.phone;
+    btn.disabled = true;
+    btn.textContent = 'Calling...';
+    try {
+      let res = await fetch('/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: phone }),
+      });
+      let data = await res.json();
+      if (res.status === 409 && data.alreadyCalled) {
+        const last = data.history[0];
+        const when = last ? new Date(last.ts).toLocaleString() : 'previously';
+        const outcome = data.history.find((h) => h.outcome)?.outcome || 'unknown outcome';
+        const ok = confirm('Already called ' + phone + ' on ' + when + ' (' + outcome + '). Call again?');
+        if (!ok) { btn.disabled = false; btn.textContent = 'Call'; return; }
+        res = await fetch('/call', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: phone, forceCall: true }),
+        });
+        data = await res.json();
+      }
+      if (data.error) { alert('Error: ' + data.error); }
+      else { alert('Calling ' + phone + '...'); }
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Call';
+      loadContacts();
+    }
+  });
+
+  // ---- Analytics ----
+  async function loadAnalytics() {
+    const res = await fetch('/admin/analytics');
+    const a = await res.json();
+
+    const statGrid = document.getElementById('statGrid');
+    statGrid.innerHTML = [
+      ['Calls initiated', a.totalCallsInitiated],
+      ['Completed', a.totalCompleted],
+      ['Voicemail rate', Math.round(a.voicemailRate * 100) + '%'],
+      ['On DNC list', a.dncCount],
+      ['Contacts', a.contactsCount],
+    ].map(([label, num]) => '<div class="statCard"><div class="num">' + num + '</div><div class="label">' + label + '</div></div>').join('');
+
+    const outcomeBars = document.getElementById('outcomeBars');
+    const outcomeEntries = Object.entries(a.outcomeCounts);
+    const maxOutcome = Math.max(1, ...outcomeEntries.map(([, n]) => n));
+    outcomeBars.innerHTML = outcomeEntries.length
+      ? outcomeEntries.map(([label, n]) =>
+          '<div class="barRow"><div class="barLabel">' + label + '</div>' +
+          '<div class="barTrack"><div class="barFill" style="width:' + (n / maxOutcome * 100) + '%"></div></div>' +
+          '<div class="barCount">' + n + '</div></div>'
+        ).join('')
+      : '<div class="empty">No completed calls yet.</div>';
+
+    const dayBars = document.getElementById('dayBars');
+    const dayEntries = Object.entries(a.callsPerDay);
+    const maxDay = Math.max(1, ...dayEntries.map(([, n]) => n));
+    dayBars.innerHTML = dayEntries.map(([day, n]) =>
+      '<div class="barRow"><div class="barLabel">' + day + '</div>' +
+      '<div class="barTrack"><div class="barFill" style="width:' + (n / maxDay * 100) + '%"></div></div>' +
+      '<div class="barCount">' + n + '</div></div>'
+    ).join('');
+  }
+</script>
+</body>
+</html>

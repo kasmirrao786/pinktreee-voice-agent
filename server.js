@@ -8,6 +8,31 @@ import fetch from 'node-fetch';
 import fsSync from 'fs';
 import path from 'path';
 import * as XLSX from 'xlsx';
+import ffmpegPath from 'ffmpeg-static';
+import { spawn } from 'child_process';
+
+// Converts whatever a TTS provider hands back (mp3, pcm, whatever) into raw
+// mu-law/8kHz - the exact format Twilio's Media Streams expect. Needed
+// because OpenRouter's TTS endpoint doesn't offer mu-law/8kHz directly the
+// way Deepgram Aura does. ffmpeg auto-detects the input format/sample rate
+// from the file header, so this works regardless of what a given provider
+// actually returns - verified against real MP3 output before shipping this.
+function transcodeToMulaw8k(inputBuffer) {
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn(ffmpegPath, ['-i', 'pipe:0', '-f', 'mulaw', '-ar', '8000', '-ac', '1', 'pipe:1']);
+    const chunks = [];
+    let stderr = '';
+    ffmpeg.stdout.on('data', (chunk) => chunks.push(chunk));
+    ffmpeg.stderr.on('data', (chunk) => { stderr += chunk; });
+    ffmpeg.on('close', (code) => {
+      if (code !== 0) return reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-300)}`));
+      resolve(Buffer.concat(chunks));
+    });
+    ffmpeg.on('error', reject);
+    ffmpeg.stdin.write(inputBuffer);
+    ffmpeg.stdin.end();
+  });
+}
 
 // ---- File-based storage on a Railway Volume --------------------------------
 // Set DATA_DIR to your Railway volume's mount path (e.g. /data) in production
@@ -16,19 +41,26 @@ import * as XLSX from 'xlsx';
 //   dnc_numbers.json   - JSON array of do-not-call entries
 //   contacts.json      - JSON array of imported contacts (CSV/XLSX)
 //   system_prompt.txt  - the live sales script, editable from the admin panel
+//   opening_line.txt   - the opening-line template, editable from the admin panel
+//   tts_config.json    - which TTS provider/model live calls use, editable from the admin panel
+//   request_logs.jsonl - per-request latency + estimated cost for every STT/LLM/TTS call
 const DATA_DIR = process.env.DATA_DIR || './data';
 const CALL_EVENTS_PATH = path.join(DATA_DIR, 'call_events.jsonl');
 const DNC_PATH = path.join(DATA_DIR, 'dnc_numbers.json');
 const CONTACTS_PATH = path.join(DATA_DIR, 'contacts.json');
 const SCRIPT_PATH = path.join(DATA_DIR, 'system_prompt.txt');
+const OPENING_PATH = path.join(DATA_DIR, 'opening_line.txt');
+const TTS_CONFIG_PATH = path.join(DATA_DIR, 'tts_config.json');
+const REQUEST_LOG_PATH = path.join(DATA_DIR, 'request_logs.jsonl');
 
 function ensureDataFiles() {
   fsSync.mkdirSync(DATA_DIR, { recursive: true });
   if (!fsSync.existsSync(CALL_EVENTS_PATH)) fsSync.writeFileSync(CALL_EVENTS_PATH, '');
   if (!fsSync.existsSync(DNC_PATH)) fsSync.writeFileSync(DNC_PATH, '[]');
   if (!fsSync.existsSync(CONTACTS_PATH)) fsSync.writeFileSync(CONTACTS_PATH, '[]');
-  // system_prompt.txt is seeded from DEFAULT_SYSTEM_PROMPT further down,
-  // once that constant exists - see loadSystemPrompt().
+  if (!fsSync.existsSync(REQUEST_LOG_PATH)) fsSync.writeFileSync(REQUEST_LOG_PATH, '');
+  // system_prompt.txt / opening_line.txt / tts_config.json are seeded by
+  // their own load*() functions further down, once their defaults exist.
 }
 
 function logCallEvent(entry) {
@@ -97,6 +129,67 @@ function getCallHistoryForNumber(phoneNumber) {
     .reverse();
 }
 
+// ---- Cost tracking ----------------------------------------------------
+// Rates below are manually maintained from each provider's published
+// pricing as of when this was built (Sept 2026) - they will drift as
+// providers change prices. Treat these as directional/comparative, not
+// exact billing reconciliation. Unknown models return a null cost rather
+// than a guess.
+const MODEL_PRICING = {
+  // LLM - $ per token
+  'anthropic/claude-sonnet-4.5': { type: 'llm', inputPerToken: 3 / 1e6, outputPerToken: 15 / 1e6 },
+  'anthropic/claude-haiku-4.5': { type: 'llm', inputPerToken: 1 / 1e6, outputPerToken: 5 / 1e6 },
+  'deepseek/deepseek-v4-flash': { type: 'llm', inputPerToken: 0.1 / 1e6, outputPerToken: 0.2 / 1e6 },
+  'meta-llama/llama-3.3-70b-instruct': { type: 'llm', inputPerToken: 0.59 / 1e6, outputPerToken: 0.79 / 1e6 },
+  // TTS - $ per character
+  'aura-asteria-en': { type: 'tts', perChar: 0.015 / 1000 },
+  'aura-2': { type: 'tts', perChar: 0.03 / 1000 },
+  'hexgrad/kokoro-82m': { type: 'tts', perChar: 0.62 / 1e6 },
+  'openai/gpt-4o-mini-tts': { type: 'tts', perChar: 15 / 1e6 }, // conservative - published figures for this model conflicted between sources
+  // STT - $ per minute of audio
+  'nova-2-phonecall': { type: 'stt', perMinute: 0.006 },
+};
+
+function estimateCost(model, usage) {
+  const pricing = MODEL_PRICING[model];
+  if (!pricing) return null;
+  if (pricing.type === 'llm') {
+    return (usage.inputTokens || 0) * pricing.inputPerToken + (usage.outputTokens || 0) * pricing.outputPerToken;
+  }
+  if (pricing.type === 'tts') {
+    return (usage.chars || 0) * pricing.perChar;
+  }
+  if (pricing.type === 'stt') {
+    return ((usage.durationMs || 0) / 60000) * pricing.perMinute;
+  }
+  return null;
+}
+
+// One line per request to any STT/LLM/TTS provider - latency and estimated
+// cost, so provider/model choices can be compared from real usage instead
+// of guessing from price sheets.
+function logRequestEvent(entry) {
+  const line = JSON.stringify({ ts: new Date().toISOString(), ...entry }) + '\n';
+  try {
+    fsSync.appendFileSync(REQUEST_LOG_PATH, line);
+  } catch (err) {
+    console.error('Failed to log request event:', err);
+  }
+}
+
+function readRequestLogs(limit = 500) {
+  const raw = fsSync.readFileSync(REQUEST_LOG_PATH, 'utf-8').trim();
+  if (!raw) return [];
+  const lines = raw.split('\n').filter(Boolean);
+  return lines.slice(-limit).reverse().map((l) => JSON.parse(l));
+}
+
+function readAllRequestLogs() {
+  const raw = fsSync.readFileSync(REQUEST_LOG_PATH, 'utf-8').trim();
+  if (!raw) return [];
+  return raw.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+}
+
 function readDncList() {
   try {
     return JSON.parse(fsSync.readFileSync(DNC_PATH, 'utf-8'));
@@ -123,6 +216,22 @@ const {
   DEEPGRAM_API_KEY,
   OPENROUTER_API_KEY,
   OPENROUTER_MODEL = 'anthropic/claude-sonnet-4.5',
+  // Post-call outcome tagging never talks to the caller - it reads a
+  // finished transcript and picks one label. That's a job a much cheaper
+  // model handles just as well as the conversation model, so it's a
+  // separate, deliberately cheap default (Haiku 4.5 is ~3x cheaper than
+  // Sonnet 4.5 on both input and output). Zero quality risk to the actual
+  // call since this runs after it's already over.
+  CLASSIFIER_MODEL = 'anthropic/claude-haiku-4.5',
+  // Prompt caching (Anthropic models only, via OpenRouter's pass-through of
+  // cache_control) can cut the repeated system-prompt tokens sent on every
+  // turn by ~90% after the first turn - meaningful on longer calls, where
+  // the same script text otherwise gets rebilled turn after turn. Off by
+  // default: this couldn't be verified against a live OpenRouter endpoint
+  // from the sandbox this was built in. Turn on and test a real call before
+  // trusting it - if it's silently ignored by your chosen model/provider,
+  // the call still works fine, you just won't see the cache-read discount.
+  ENABLE_PROMPT_CACHING = 'false',
   AURA_MODEL = 'aura-asteria-en', // Deepgram TTS voice - see deepgram.com/docs for the full list
   PORT = 3000,
   PUBLIC_HOSTNAME,
@@ -131,6 +240,12 @@ const {
   CALL_HOURS_START = '9',  // 24h, local to CALL_HOURS_TZ
   CALL_HOURS_END = '20',   // 24h, local to CALL_HOURS_TZ
   MAX_CONCURRENT_CALLS = '5',
+  // How long Deepgram waits after the caller stops talking before firing
+  // UtteranceEnd (turn-end signal). Lower = snappier but more likely to cut
+  // people off mid-thought; higher = more patient but slower to respond.
+  // 1000ms is a reasonable middle ground - tune per how "pausey" your
+  // callers tend to be.
+  UTTERANCE_END_MS = '1000',
 } = process.env;
 
 const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
@@ -156,9 +271,25 @@ async function synthesizeSpeechMp3(text) {
   return Buffer.from(await res.arrayBuffer());
 }
 
+const promptCachingEnabled = ENABLE_PROMPT_CACHING === 'true';
+
+// When enabled, marks the system prompt as cacheable (Anthropic-style
+// cache_control, which OpenRouter passes through for Anthropic models).
+// The conversation history still grows and isn't cached - only the fixed
+// system prompt is - but that's the part that otherwise gets re-billed in
+// full on every single turn of a call.
+function buildSystemMessage(system) {
+  if (!promptCachingEnabled) return { role: 'system', content: system };
+  return {
+    role: 'system',
+    content: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
+  };
+}
+
 // ---- LLM brain, via OpenRouter (OpenAI-compatible chat completions) -------
 // Used both by live calls and the no-Twilio /test chat panel below.
-async function callLLM({ system, messages, maxTokens = 200 }) {
+async function callLLM({ system, messages, maxTokens = 200, model = OPENROUTER_MODEL }) {
+  const start = Date.now();
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -170,9 +301,9 @@ async function callLLM({ system, messages, maxTokens = 200 }) {
       'X-Title': 'PinkTree Voice Agent',
     },
     body: JSON.stringify({
-      model: OPENROUTER_MODEL,
+      model,
       max_tokens: maxTokens,
-      messages: [{ role: 'system', content: system }, ...messages],
+      messages: [buildSystemMessage(system), ...messages],
     }),
   });
 
@@ -182,6 +313,16 @@ async function callLLM({ system, messages, maxTokens = 200 }) {
   }
 
   const data = await res.json();
+  logRequestEvent({
+    type: 'llm',
+    model,
+    inputTokens: data.usage?.prompt_tokens || null,
+    outputTokens: data.usage?.completion_tokens || null,
+    durationMs: Date.now() - start,
+    estimatedCost: data.usage
+      ? estimateCost(model, { inputTokens: data.usage.prompt_tokens, outputTokens: data.usage.completion_tokens })
+      : null,
+  });
   return data.choices?.[0]?.message?.content?.trim() || '';
 }
 
@@ -192,7 +333,8 @@ async function callLLM({ system, messages, maxTokens = 200 }) {
 // single biggest latency win available here: time-to-first-audio drops from
 // "however long the full reply takes to generate" to "however long the
 // first sentence takes."
-async function callLLMStream({ system, messages, maxTokens = 200, onSentence }) {
+async function callLLMStream({ system, messages, maxTokens = 200, onSentence, model = OPENROUTER_MODEL }) {
+  const start = Date.now();
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -202,10 +344,11 @@ async function callLLMStream({ system, messages, maxTokens = 200, onSentence }) 
       'X-Title': 'PinkTree Voice Agent',
     },
     body: JSON.stringify({
-      model: OPENROUTER_MODEL,
+      model,
       max_tokens: maxTokens,
       stream: true,
-      messages: [{ role: 'system', content: system }, ...messages],
+      stream_options: { include_usage: true }, // OpenAI-compatible - asks for a final usage chunk so cost can be logged accurately instead of estimated from character counts
+      messages: [buildSystemMessage(system), ...messages],
     }),
   });
 
@@ -217,6 +360,7 @@ async function callLLMStream({ system, messages, maxTokens = 200, onSentence }) 
   let lineBuffer = '';     // raw SSE bytes that haven't formed a full line yet
   let sentenceBuffer = ''; // model text not yet flushed as a complete sentence
   let fullText = '';
+  let usage = null;
 
   // Pulls one complete sentence off the front of sentenceBuffer, if there is
   // one. `force` flushes whatever's left even without terminal punctuation -
@@ -255,6 +399,7 @@ async function callLLMStream({ system, messages, maxTokens = 200, onSentence }) 
           fullText += delta;
           while (flushSentence()) {} // flush every sentence that's now complete
         }
+        if (json.usage) usage = json.usage; // arrives once, in the final chunk
       } catch {
         // A single SSE chunk occasionally splits mid-JSON across network
         // reads - the remainder completes it on the next chunk, safe to skip.
@@ -262,6 +407,16 @@ async function callLLMStream({ system, messages, maxTokens = 200, onSentence }) 
     }
   }
   flushSentence(true);
+  logRequestEvent({
+    type: 'llm',
+    model,
+    inputTokens: usage?.prompt_tokens || null,
+    outputTokens: usage?.completion_tokens || null,
+    durationMs: Date.now() - start,
+    estimatedCost: usage
+      ? estimateCost(model, { inputTokens: usage.prompt_tokens, outputTokens: usage.completion_tokens })
+      : null,
+  });
   return fullText.trim();
 }
 
@@ -321,6 +476,32 @@ async function ensureFallbackClips() {
       console.error(`Fallback clip "${key}" failed to generate:`, err.message);
     }
   }
+}
+
+// ---- Opt-out fast path --------------------------------------------------
+// An explicit "stop calling me" is a compliance-critical moment that's also
+// one of the cheapest turns to optimize: skip the LLM and live TTS entirely
+// (pure savings), respond with a guaranteed-correct pre-generated
+// confirmation (arguably more reliable here than letting the LLM improvise
+// the exact wording), then hang up immediately instead of running further
+// billable call minutes. Deliberately conservative pattern - a missed match
+// just falls through to the normal LLM path and the script's own opt-out
+// handling in SYSTEM_PROMPT still catches it there, so a false negative
+// costs nothing extra; a false positive would end a call prematurely, which
+// is why this only matches unambiguous phrasing.
+const OPT_OUT_PATTERN =
+  /\b(stop calling|remove me from|take me off|don'?t call (me )?again|do not call (me )?again|do not call list|unsubscribe)\b/i;
+
+function detectOptOutIntent(text) {
+  return OPT_OUT_PATTERN.test(text);
+}
+
+const OPT_OUT_CONFIRMATION_TEXT =
+  "Understood, I'll remove your number from our calling list right away. Thanks for your time, have a good day.";
+let optOutClip = null;
+
+async function ensureOptOutClip() {
+  optOutClip = await synthesizeSpeechMulaw(OPT_OUT_CONFIRMATION_TEXT);
 }
 
 // ~150ms of silence between sentences (G.711 mu-law silence = byte 0xFF) so
@@ -428,6 +609,122 @@ function loadSystemPrompt() {
     fsSync.writeFileSync(SCRIPT_PATH, DEFAULT_SYSTEM_PROMPT);
     systemPrompt = DEFAULT_SYSTEM_PROMPT;
   }
+}
+
+// ---- Opening line: skipped past the LLM entirely -------------------------
+// The opening line is the one turn of every call that doesn't benefit from
+// generation - it's the same handful of sentences every time, just
+// optionally naming the company. Routing it through the LLM (even
+// streaming) still costs a real network round-trip at the single most
+// latency-sensitive moment of the whole call: the silence right after
+// someone picks up. So it's templated instead, with a tiny optional-clause
+// syntax: {company} is a placeholder, and [[...{company}...]] is a block
+// that's dropped entirely if company isn't known for this call.
+const DEFAULT_OPENING_TEMPLATE =
+  'Hi, this is Sarah calling from PinkTree[[ about {company}\'s website]] - ' +
+  'we help visa consulting firms convert more website visitors into clients. ' +
+  'Am I speaking with the right person to talk about that?';
+
+let openingTemplate = DEFAULT_OPENING_TEMPLATE;
+
+function loadOpeningTemplate() {
+  if (fsSync.existsSync(OPENING_PATH)) {
+    openingTemplate = fsSync.readFileSync(OPENING_PATH, 'utf-8');
+  } else {
+    fsSync.writeFileSync(OPENING_PATH, DEFAULT_OPENING_TEMPLATE);
+    openingTemplate = DEFAULT_OPENING_TEMPLATE;
+  }
+}
+
+// ---- Live-call TTS provider/model - editable from the admin panel --------
+// Cached clips (backchannel, fallback, opt-out, generic opening) stay on
+// Deepgram Aura always - they're generated once at startup, so their cost
+// is fixed and negligible regardless of which provider is picked here. This
+// setting only controls the per-sentence TTS used during actual live
+// conversation, which is the part that scales with call volume/cost.
+const DEFAULT_TTS_CONFIG = { provider: 'deepgram', model: 'aura-asteria-en', voice: null };
+let ttsConfig = { ...DEFAULT_TTS_CONFIG };
+
+function loadTtsConfig() {
+  if (fsSync.existsSync(TTS_CONFIG_PATH)) {
+    try {
+      ttsConfig = JSON.parse(fsSync.readFileSync(TTS_CONFIG_PATH, 'utf-8'));
+    } catch {
+      ttsConfig = { ...DEFAULT_TTS_CONFIG };
+    }
+  } else {
+    fsSync.writeFileSync(TTS_CONFIG_PATH, JSON.stringify(DEFAULT_TTS_CONFIG, null, 2));
+    ttsConfig = { ...DEFAULT_TTS_CONFIG };
+  }
+}
+
+// Fetches one sentence of live-call audio as mu-law/8kHz, routed through
+// whichever provider is currently configured, and logs latency + estimated
+// cost for it either way - this is the actual per-call cost driver, unlike
+// the cached clips above.
+async function fetchLiveSentenceAudio(text) {
+  const start = Date.now();
+  let buffer;
+
+  if (ttsConfig.provider === 'openrouter') {
+    const res = await fetch('https://openrouter.ai/api/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: ttsConfig.model,
+        input: text,
+        ...(ttsConfig.voice ? { voice: ttsConfig.voice } : {}),
+        response_format: 'mp3', // self-describing format, so ffmpeg gets the real sample rate regardless of what the provider actually returns
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`OpenRouter TTS failed: ${res.status} ${errText}`);
+    }
+    const rawAudio = Buffer.from(await res.arrayBuffer());
+    buffer = await transcodeToMulaw8k(rawAudio);
+  } else {
+    buffer = await synthesizeSpeechMulaw(text);
+  }
+
+  logRequestEvent({
+    type: 'tts',
+    provider: ttsConfig.provider,
+    model: ttsConfig.provider === 'openrouter' ? ttsConfig.model : AURA_MODEL,
+    chars: text.length,
+    durationMs: Date.now() - start,
+    estimatedCost: estimateCost(ttsConfig.provider === 'openrouter' ? ttsConfig.model : AURA_MODEL, { chars: text.length }),
+  });
+
+  return buffer;
+}
+
+function renderOpeningLine(template, vars) {
+  // Optional blocks: [[ ... {var} ... ]] - included only if every {var}
+  // referenced inside it is present in `vars`; dropped entirely otherwise.
+  let result = template.replace(/\[\[([^[\]]*?)\]\]/g, (whole, inner) => {
+    const varNames = [...inner.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
+    const missing = varNames.some((v) => !vars[v]);
+    if (missing) return '';
+    return inner.replace(/\{(\w+)\}/g, (_, v) => vars[v]);
+  });
+  // Any remaining top-level placeholders outside an optional block.
+  result = result.replace(/\{(\w+)\}/g, (_, v) => vars[v] || '');
+  return result.replace(/\s+/g, ' ').replace(/\s+([,.?!])/g, '$1').trim();
+}
+
+// The fully-generic render (no contact data) is cacheable - it's the same
+// audio every time, so it's synthesized once at startup instead of on every
+// call that doesn't match a known contact. Personalized (with company)
+// still needs a live TTS call since the text genuinely varies.
+let genericOpeningClip = null;
+
+async function ensureGenericOpeningClip() {
+  const text = renderOpeningLine(openingTemplate, {});
+  genericOpeningClip = await synthesizeSpeechMulaw(text);
 }
 
 const app = express();
@@ -610,6 +907,98 @@ app.post('/admin/script/reset', (req, res) => {
   res.json({ prompt: systemPrompt });
 });
 
+// ---- Opening-line template editor -----------------------------------------
+// Supports {company} and the optional-block syntax [[...{company}...]] -
+// see renderOpeningLine() above. Saving regenerates the cached generic
+// (no-company) clip so it stays in sync with the edited template.
+app.get('/admin/opening', (req, res) => {
+  res.json({ template: openingTemplate, isDefault: openingTemplate === DEFAULT_OPENING_TEMPLATE });
+});
+
+app.post('/admin/opening', async (req, res) => {
+  const { template } = req.body;
+  if (!template || !template.trim()) return res.status(400).json({ error: 'missing "template"' });
+  openingTemplate = template;
+  fsSync.writeFileSync(OPENING_PATH, template);
+  ensureGenericOpeningClip().catch((err) => console.error('Opening clip regeneration failed:', err.message));
+  res.sendStatus(204);
+});
+
+app.post('/admin/opening/reset', async (req, res) => {
+  openingTemplate = DEFAULT_OPENING_TEMPLATE;
+  fsSync.writeFileSync(OPENING_PATH, DEFAULT_OPENING_TEMPLATE);
+  ensureGenericOpeningClip().catch((err) => console.error('Opening clip regeneration failed:', err.message));
+  res.json({ template: openingTemplate });
+});
+
+// ---- Live-call TTS provider/model - editable from the admin panel --------
+app.get('/admin/tts-config', (req, res) => {
+  res.json({ config: ttsConfig, isDefault: JSON.stringify(ttsConfig) === JSON.stringify(DEFAULT_TTS_CONFIG) });
+});
+
+app.post('/admin/tts-config', (req, res) => {
+  const { provider, model, voice } = req.body;
+  if (!provider || !model) return res.status(400).json({ error: 'missing "provider" or "model"' });
+  ttsConfig = { provider, model, voice: voice || null };
+  fsSync.writeFileSync(TTS_CONFIG_PATH, JSON.stringify(ttsConfig, null, 2));
+  res.sendStatus(204);
+});
+
+app.post('/admin/tts-config/reset', (req, res) => {
+  ttsConfig = { ...DEFAULT_TTS_CONFIG };
+  fsSync.writeFileSync(TTS_CONFIG_PATH, JSON.stringify(ttsConfig, null, 2));
+  res.json({ config: ttsConfig });
+});
+
+// ---- Request logs + cost summary ------------------------------------------
+// Every STT/LLM/TTS call logs its own latency + estimated cost (see
+// logRequestEvent/estimateCost above) - these endpoints surface that data
+// for comparing providers/models from real usage instead of price sheets.
+app.get('/admin/request-logs', (req, res) => {
+  try {
+    res.json(readRequestLogs(500));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/cost-summary', (req, res) => {
+  try {
+    const logs = readAllRequestLogs();
+    const summary = {}; // keyed by `${type}:${provider||''}:${model}`
+    for (const entry of logs) {
+      const key = `${entry.type}:${entry.provider || ''}:${entry.model}`;
+      if (!summary[key]) {
+        summary[key] = {
+          type: entry.type,
+          provider: entry.provider || null,
+          model: entry.model,
+          requests: 0,
+          totalCost: 0,
+          unknownCostRequests: 0,
+          totalDurationMs: 0,
+        };
+      }
+      const s = summary[key];
+      s.requests += 1;
+      s.totalDurationMs += entry.durationMs || 0;
+      if (entry.estimatedCost != null) s.totalCost += entry.estimatedCost;
+      else s.unknownCostRequests += 1;
+    }
+    const rows = Object.values(summary).map((s) => ({
+      ...s,
+      avgLatencyMs: s.requests ? Math.round(s.totalDurationMs / s.requests) : 0,
+    }));
+    res.json({
+      rows,
+      grandTotalCost: rows.reduce((sum, r) => sum + r.totalCost, 0),
+      totalRequests: rows.reduce((sum, r) => sum + r.requests, 0),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---- Contacts: CSV/XLSX import + list with call history --------------------
 // POST /admin/contacts/import - body is the raw file bytes (.csv or .xlsx).
 // Expects a header row with at least a phone/number/to column; name/company
@@ -777,10 +1166,15 @@ app.post('/voice', (req, res) => {
   // Live call: open the Media Stream, passing CallSid + the callee number
   // through so the WebSocket handler can correlate this session with the
   // log/call record and auto-add to the DNC list on explicit opt-out.
+  // company (if this number matches an imported contact) personalizes the
+  // skip-LLM opening line - see renderOpeningLine() / handleUserUtterance.
+  const toNumber = req.body.To || '';
+  const contact = readContacts().find((c) => c.phone === toNumber);
   const connect = twiml.connect();
   const stream = connect.stream({ url: `wss://${PUBLIC_HOSTNAME}/media-stream` });
   stream.parameter({ name: 'callSid', value: CallSid });
-  stream.parameter({ name: 'toNumber', value: req.body.To || '' });
+  stream.parameter({ name: 'toNumber', value: toNumber });
+  stream.parameter({ name: 'company', value: contact?.company || '' });
   res.type('text/xml').send(twiml.toString());
 });
 
@@ -816,6 +1210,8 @@ async function ensureVoicemailAudio() {
 
 ensureDataFiles();
 loadSystemPrompt();
+loadOpeningTemplate();
+loadTtsConfig();
 
 // Voicemail audio is a nice-to-have, not core to the service - a bad
 // AURA_MODEL or a transient Deepgram error shouldn't crash-loop the whole
@@ -833,6 +1229,14 @@ ensureBackchannelClips().catch((err) => {
 
 ensureFallbackClips().catch((err) => {
   console.error('Fallback clip generation failed (continuing without it):', err.message);
+});
+
+ensureGenericOpeningClip().catch((err) => {
+  console.error('Generic opening clip generation failed (falling back to live TTS for it):', err.message);
+});
+
+ensureOptOutClip().catch((err) => {
+  console.error('Opt-out clip generation failed (fast path disabled, falling back to LLM):', err.message);
 });
 
 server.listen(PORT, () => console.log(`Listening on :${PORT}`));
@@ -853,6 +1257,9 @@ class CallSession {
     // Set on barge-in - lets a whole turn's queued sentences be cancelled,
     // not just whatever sentence happens to be mid-playback right now.
     this.turnCancelled = false;
+    // Set by the opt-out fast path - skips the post-call LLM classifier
+    // entirely when the outcome is already certain, saving that call too.
+    this.knownOutcome = null;
 
     this.setupDeepgram();
     this.setupTwilioHandlers();
@@ -875,11 +1282,12 @@ class CallSession {
       // endpointing/speech_final alone - endpointing can fire on a brief
       // mid-thought pause ("I need... to check my calendar") and cut the
       // caller off. UtteranceEnd waits for a longer, more confident gap.
-      utterance_end_ms: 1000,
+      utterance_end_ms: parseInt(UTTERANCE_END_MS, 10),
     });
 
     this.dgConnection.on(LiveTranscriptionEvents.Open, () => {
       console.log('Deepgram connection open');
+      this.sttStartedAt = Date.now();
     });
 
     // Barge-in: caller started talking while we're still playing TTS audio.
@@ -924,6 +1332,7 @@ class CallSession {
           this.streamSid = data.start.streamSid;
           this.callSid = data.start.customParameters?.callSid || null;
           this.toNumber = data.start.customParameters?.toNumber || null;
+          this.contactCompany = data.start.customParameters?.company || '';
           activeCallSids.add(this.callSid);
           console.log('Stream started:', this.streamSid, 'call:', this.callSid);
           logCallEvent({ event: 'stream_started', callSid: this.callSid, streamSid: this.streamSid });
@@ -958,18 +1367,47 @@ class CallSession {
   // to say, streaming its reply straight into TTS sentence-by-sentence.
   async handleUserUtterance(text) {
     const isOpeningLine = text === '[CALL_CONNECTED]';
-    const userMessage = isOpeningLine
-      ? 'The call just connected. Give your opening line.'
-      : text;
 
-    this.history.push({ role: 'user', content: userMessage });
+    if (isOpeningLine) {
+      // The opening line never touches the LLM - it's a fixed template
+      // (optionally naming the company), not something generation adds
+      // value to, and this is the single most latency-sensitive moment of
+      // the call: dead air right after pickup reads as a broken/robotic
+      // call. Generic (no company match) uses a clip cached at startup -
+      // zero network latency. Personalized (company known) still needs one
+      // live TTS call since that text genuinely varies, but skips the LLM
+      // round-trip either way.
+      this.turnCancelled = false;
+      const opening = renderOpeningLine(openingTemplate, { company: this.contactCompany });
+      this.history.push({ role: 'user', content: 'The call just connected. Give your opening line.' });
+      this.history.push({ role: 'assistant', content: opening });
+      if (!this.contactCompany && genericOpeningClip) {
+        await this.playBuffer(genericOpeningClip);
+      } else {
+        await this.speakStreaming(opening);
+      }
+      return;
+    }
+
+    this.history.push({ role: 'user', content: text });
     this.turnCancelled = false; // fresh turn - clear any cancellation from a prior one
+
+    // Fast path: explicit opt-out request. See ensureOptOutClip() for why
+    // this skips the LLM/TTS entirely and ends the call right away instead
+    // of continuing to run billable minutes on a call that's already over.
+    if (detectOptOutIntent(text) && optOutClip) {
+      this.history.push({ role: 'assistant', content: OPT_OUT_CONFIRMATION_TEXT });
+      this.knownOutcome = 'do_not_call';
+      if (this.toNumber) addToDncList(this.toNumber, 'requested removal on call (fast-path match)');
+      await this.playBuffer(optOutClip);
+      await this.endCall();
+      return;
+    }
 
     // Backchanneling: fire a quick "mm-hmm"/"got it" immediately so the
     // caller isn't met with dead air while the LLM generates - masks
-    // latency and reads as a natural acknowledgment. Skipped before the
-    // opening line, since there's nothing to acknowledge yet.
-    if (!isOpeningLine) this.playBackchannel();
+    // latency and reads as a natural acknowledgment.
+    this.playBackchannel();
 
     // Sentences play in order via speakChain, but their TTS audio is
     // fetched as soon as the text is ready - not when it's that sentence's
@@ -1012,7 +1450,7 @@ class CallSession {
       await callLLMStream({
         system: systemPrompt,
         messages: this.history,
-        maxTokens: 200,
+        maxTokens: 150,
         onSentence,
       });
       await speakChain;
@@ -1062,10 +1500,24 @@ class CallSession {
   // First sentence of a turn: play audio as it streams in from Aura rather
   // than waiting for the whole clip - this is what gives the lowest
   // possible time-to-first-audio for the turn.
+  // True low-latency streaming path - only confirmed to work this way for
+  // Deepgram Aura (audio starts playing before the full clip is generated).
+  // OpenRouter's TTS endpoint hasn't been verified to stream progressively
+  // the same way, so when it's selected this falls back to fetch-the-whole-
+  // clip-then-play - slightly higher time-to-first-audio on turn 1 only,
+  // not a broken call. Sentences after the first already used the buffered
+  // path regardless of provider (see fetchSentenceAudio below).
   async speakStreaming(text) {
     if (this.turnCancelled) return;
+
+    if (ttsConfig.provider !== 'deepgram') {
+      const buffer = await this.fetchSentenceAudio(text);
+      return this.playBuffer(buffer);
+    }
+
     this.speaking = true;
     this.currentUtteranceInterrupted = false;
+    const start = Date.now();
 
     try {
       const res = await fetch(
@@ -1090,6 +1542,14 @@ class CallSession {
           })
         );
       }
+      logRequestEvent({
+        type: 'tts',
+        provider: 'deepgram',
+        model: AURA_MODEL,
+        chars: text.length,
+        durationMs: Date.now() - start,
+        estimatedCost: estimateCost(AURA_MODEL, { chars: text.length }),
+      });
       if (!this.currentUtteranceInterrupted) this.sendPause();
     } catch (err) {
       console.error('TTS error:', err);
@@ -1101,8 +1561,9 @@ class CallSession {
   // Fetches one sentence's full audio into memory without playing it -
   // used to prefetch sentence N+1 while sentence N is still playing, so
   // there's no gap waiting on a fresh TTS round-trip between sentences.
+  // Routed through whichever provider is configured (see fetchLiveSentenceAudio).
   async fetchSentenceAudio(text) {
-    return synthesizeSpeechMulaw(text);
+    return fetchLiveSentenceAudio(text);
   }
 
   // Plays an already-fetched audio buffer (a prefetched sentence, a cached
@@ -1144,13 +1605,27 @@ class CallSession {
     );
   }
 
-  // Call ended -> ask Claude to tag the outcome, then write the full record.
-  // One extra cheap call per finished call; keeps outcome tagging consistent
-  // instead of hand-parsing transcripts later. If the callee explicitly asked
-  // not to be called again, auto-add them to the DNC list.
+  // Ends the call immediately via Twilio's REST API. Used once we're
+  // certain there's no reason to keep the line open (opt-out confirmed) -
+  // every extra second here is a second of Twilio/Deepgram minutes billed
+  // on a call that's already resolved.
+  async endCall() {
+    if (!this.callSid) return;
+    try {
+      await twilioClient.calls(this.callSid).update({ status: 'completed' });
+    } catch (err) {
+      console.error('Failed to end call via REST API:', err.message);
+    }
+  }
+
+  // Call ended -> ask the classifier model to tag the outcome, then write
+  // the full record. Skipped entirely when the outcome is already certain
+  // (e.g. the opt-out fast path) - one fewer LLM call on calls where the
+  // answer was never in doubt. If the callee explicitly asked not to be
+  // called again, auto-add them to the DNC list.
   async finalizeCallLog() {
-    let outcome = 'unclear';
-    if (this.history.length > 0) {
+    let outcome = this.knownOutcome || 'unclear';
+    if (!this.knownOutcome && this.history.length > 0) {
       try {
         const transcriptText = this.history
           .map((m) => `${m.role}: ${m.content}`)
@@ -1165,6 +1640,7 @@ class CallSession {
             ' Respond with only the label, nothing else.',
           messages: [{ role: 'user', content: transcriptText }],
           maxTokens: 20,
+          model: CLASSIFIER_MODEL, // cheap model - this never talks to the caller
         });
         if (label) outcome = label.trim();
 
@@ -1174,6 +1650,20 @@ class CallSession {
       } catch (err) {
         console.error('Outcome classification failed:', err);
       }
+    }
+
+    // STT cost approximated from how long the Deepgram connection was open
+    // for this call - not exact billed-second precision, but close enough
+    // to compare against alternative providers/plans.
+    if (this.sttStartedAt) {
+      const durationMs = Date.now() - this.sttStartedAt;
+      logRequestEvent({
+        type: 'stt',
+        provider: 'deepgram',
+        model: 'nova-2-phonecall',
+        durationMs,
+        estimatedCost: estimateCost('nova-2-phonecall', { durationMs }),
+      });
     }
 
     logCallEvent({

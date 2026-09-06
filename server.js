@@ -34,6 +34,27 @@ function transcodeToMulaw8k(inputBuffer) {
   });
 }
 
+// Wraps raw mu-law bytes (what Twilio and our TTS pipeline use internally)
+// in a minimal WAV header so it can be played back by a plain <audio> tag -
+// used only for bulk-test sample clips, never for the live-call path.
+function wrapMulawAsWav(mulawBuffer, sampleRate = 8000) {
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + mulawBuffer.length, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(7, 20); // format tag 7 = mu-law
+  header.writeUInt16LE(1, 22); // mono
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate, 28); // byte rate (1 byte/sample for 8-bit mu-law)
+  header.writeUInt16LE(1, 32); // block align
+  header.writeUInt16LE(8, 34); // bits per sample
+  header.write('data', 36);
+  header.writeUInt32LE(mulawBuffer.length, 40);
+  return Buffer.concat([header, mulawBuffer]);
+}
+
 // ---- File-based storage on a Railway Volume --------------------------------
 // Set DATA_DIR to your Railway volume's mount path (e.g. /data) in production
 // so this survives restarts/redeploys. Falls back to ./data for local dev.
@@ -288,7 +309,7 @@ function buildSystemMessage(system) {
 
 // ---- LLM brain, via OpenRouter (OpenAI-compatible chat completions) -------
 // Used both by live calls and the no-Twilio /test chat panel below.
-async function callLLM({ system, messages, maxTokens = 200, model = OPENROUTER_MODEL }) {
+async function callLLM({ system, messages, maxTokens = 200, model = OPENROUTER_MODEL, source = 'call' }) {
   const start = Date.now();
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -316,6 +337,7 @@ async function callLLM({ system, messages, maxTokens = 200, model = OPENROUTER_M
   logRequestEvent({
     type: 'llm',
     model,
+    source,
     inputTokens: data.usage?.prompt_tokens || null,
     outputTokens: data.usage?.completion_tokens || null,
     durationMs: Date.now() - start,
@@ -333,7 +355,7 @@ async function callLLM({ system, messages, maxTokens = 200, model = OPENROUTER_M
 // single biggest latency win available here: time-to-first-audio drops from
 // "however long the full reply takes to generate" to "however long the
 // first sentence takes."
-async function callLLMStream({ system, messages, maxTokens = 200, onSentence, model = OPENROUTER_MODEL }) {
+async function callLLMStream({ system, messages, maxTokens = 200, onSentence, model = OPENROUTER_MODEL, source = 'call' }) {
   const start = Date.now();
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -410,6 +432,7 @@ async function callLLMStream({ system, messages, maxTokens = 200, onSentence, mo
   logRequestEvent({
     type: 'llm',
     model,
+    source,
     inputTokens: usage?.prompt_tokens || null,
     outputTokens: usage?.completion_tokens || null,
     durationMs: Date.now() - start,
@@ -662,7 +685,7 @@ function loadTtsConfig() {
 // whichever provider is currently configured, and logs latency + estimated
 // cost for it either way - this is the actual per-call cost driver, unlike
 // the cached clips above.
-async function fetchLiveSentenceAudio(text) {
+async function fetchLiveSentenceAudio(text, source = 'call') {
   const start = Date.now();
   let buffer;
 
@@ -694,6 +717,7 @@ async function fetchLiveSentenceAudio(text) {
     type: 'tts',
     provider: ttsConfig.provider,
     model: ttsConfig.provider === 'openrouter' ? ttsConfig.model : AURA_MODEL,
+    source,
     chars: text.length,
     durationMs: Date.now() - start,
     estimatedCost: estimateCost(ttsConfig.provider === 'openrouter' ? ttsConfig.model : AURA_MODEL, { chars: text.length }),
@@ -954,9 +978,17 @@ app.post('/admin/tts-config/reset', (req, res) => {
 // Every STT/LLM/TTS call logs its own latency + estimated cost (see
 // logRequestEvent/estimateCost above) - these endpoints surface that data
 // for comparing providers/models from real usage instead of price sheets.
+// Bulk-test requests are tagged with a distinct source (see the bulk
+// testing section) and deliberately excluded here so synthetic test runs
+// never inflate real production cost/latency numbers - see
+// GET /admin/bulk-test-runs for those instead.
+function isRealCallEntry(entry) {
+  return !entry.source || entry.source === 'call';
+}
+
 app.get('/admin/request-logs', (req, res) => {
   try {
-    res.json(readRequestLogs(500));
+    res.json(readRequestLogs(500).filter(isRealCallEntry));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -964,7 +996,7 @@ app.get('/admin/request-logs', (req, res) => {
 
 app.get('/admin/cost-summary', (req, res) => {
   try {
-    const logs = readAllRequestLogs();
+    const logs = readAllRequestLogs().filter(isRealCallEntry);
     const summary = {}; // keyed by `${type}:${provider||''}:${model}`
     for (const entry of logs) {
       const key = `${entry.type}:${entry.provider || ''}:${entry.model}`;
@@ -1103,6 +1135,137 @@ app.get('/admin/analytics', (req, res) => {
     outcomeCounts,
     callsPerDay: byDay,
   });
+});
+
+// ---- Bulk testing: cost/latency comparison without making real calls -----
+// Runs canned caller scripts through the exact same production pipeline
+// (callLLMStream + fetchLiveSentenceAudio - same functions a live call
+// uses) so the cost/latency numbers are real, not simulated. No audio is
+// played anywhere (no live call in progress) - a couple of sample clips are
+// saved per run so you can still listen for quality. Every request is
+// tagged with this run's ID so it never mixes into real-call analytics/cost
+// tracking.
+const BULK_TEST_SCRIPTS = [
+  { name: 'quick_not_interested', turns: ['Hello?', "Not interested, thanks.", "No really, I'm good, please don't call back."] },
+  { name: 'full_qualify_to_book', turns: ["This is Dave, what's this about?", 'We just use email for that, why does it matter?', 'Okay, what does it actually do?', 'That sounds useful actually, when could we do a demo?', 'Tuesday afternoon works, use this number.'] },
+  { name: 'gatekeeper', turns: ["This is the front desk, she's not in right now.", "I can take a message, what's this regarding?", "I'll pass it along, thanks."] },
+  { name: 'pricing_objection', turns: ['How much does this cost?', "That's more than we'd want to spend honestly.", 'Maybe, can you send something in writing?'] },
+  { name: 'opt_out', turns: ['Please stop calling me, take me off your list.'] },
+];
+
+const BULK_TEST_RUNS_PATH = path.join(DATA_DIR, 'bulk_test_runs.jsonl');
+const BULK_TEST_SAMPLES_DIR = path.join('public', 'bulk-test-samples');
+
+function logBulkTestRun(summary) {
+  fsSync.appendFileSync(BULK_TEST_RUNS_PATH, JSON.stringify(summary) + '\n');
+}
+
+function readBulkTestRuns() {
+  if (!fsSync.existsSync(BULK_TEST_RUNS_PATH)) return [];
+  const raw = fsSync.readFileSync(BULK_TEST_RUNS_PATH, 'utf-8').trim();
+  if (!raw) return [];
+  return raw.split('\n').filter(Boolean).map((l) => JSON.parse(l)).reverse();
+}
+
+// Runs one scripted conversation through the real pipeline. `source` tags
+// every request this generates so it can be pulled back out of the request
+// log afterward for aggregation, and to keep it out of real-call analytics.
+async function runBulkTestScript(script, source, saveSample) {
+  const history = [];
+  const turns = [];
+  let sampleSaved = false;
+
+  const opening = renderOpeningLine(openingTemplate, {});
+  history.push({ role: 'user', content: 'The call just connected. Give your opening line.' });
+  history.push({ role: 'assistant', content: opening });
+  const openingAudio = await fetchLiveSentenceAudio(opening, source);
+  turns.push({ turn: 'opening', callerLine: null, replyText: opening });
+  if (saveSample && !sampleSaved) {
+    fsSync.mkdirSync(BULK_TEST_SAMPLES_DIR, { recursive: true });
+    fsSync.writeFileSync(path.join(BULK_TEST_SAMPLES_DIR, `${source}.wav`), wrapMulawAsWav(openingAudio));
+    sampleSaved = true;
+  }
+
+  for (const callerLine of script.turns) {
+    history.push({ role: 'user', content: callerLine });
+
+    if (detectOptOutIntent(callerLine)) {
+      // Mirrors the real fast path - zero LLM/TTS cost, nothing to log.
+      history.push({ role: 'assistant', content: OPT_OUT_CONFIRMATION_TEXT });
+      turns.push({ turn: 'opt_out_fastpath', callerLine, replyText: OPT_OUT_CONFIRMATION_TEXT, skippedLLM: true });
+      continue;
+    }
+
+    let fullReply = '';
+    let speakChain = Promise.resolve();
+    await callLLMStream({
+      system: systemPrompt,
+      messages: history,
+      maxTokens: 150,
+      model: OPENROUTER_MODEL,
+      source,
+      onSentence: (sentence) => {
+        fullReply += (fullReply ? ' ' : '') + sentence;
+        speakChain = speakChain.then(() => fetchLiveSentenceAudio(sentence, source));
+      },
+    });
+    await speakChain;
+    history.push({ role: 'assistant', content: fullReply });
+    turns.push({ turn: 'reply', callerLine, replyText: fullReply });
+  }
+
+  return { script: script.name, turns };
+}
+
+app.post('/admin/bulk-test', async (req, res) => {
+  const repeats = Math.min(Math.max(parseInt(req.body.repeats, 10) || 1, 1), 5); // capped - this spends real API cost
+  const runId = 'bulktest_' + Date.now();
+  const results = [];
+
+  try {
+    let scriptIndex = 0;
+    for (let i = 0; i < repeats; i++) {
+      for (const script of BULK_TEST_SCRIPTS) {
+        // Save an audio sample only for the first run through each script,
+        // not every repeat - one clip per script is enough to listen to.
+        const result = await runBulkTestScript(script, runId, i === 0);
+        results.push(result);
+        scriptIndex++;
+      }
+    }
+
+    const logs = readAllRequestLogs().filter((e) => e.source === runId);
+    const byType = {};
+    for (const e of logs) {
+      byType[e.type] = byType[e.type] || { requests: 0, cost: 0 };
+      byType[e.type].requests += 1;
+      byType[e.type].cost += e.estimatedCost || 0;
+    }
+    const totalCost = logs.reduce((sum, e) => sum + (e.estimatedCost || 0), 0);
+    const totalRequests = logs.length;
+    const avgLatencyMs = totalRequests ? Math.round(logs.reduce((s, e) => s + (e.durationMs || 0), 0) / totalRequests) : 0;
+
+    const summary = {
+      runId,
+      ts: new Date().toISOString(),
+      ttsConfig: { ...ttsConfig },
+      llmModel: OPENROUTER_MODEL,
+      scriptsRun: results.length,
+      totalCost,
+      totalRequests,
+      avgLatencyMs,
+      byType,
+    };
+    logBulkTestRun(summary);
+    res.json({ summary, results });
+  } catch (err) {
+    console.error('Bulk test failed:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/admin/bulk-test-runs', (req, res) => {
+  res.json(readBulkTestRuns());
 });
 
 // ---- Do-not-call list -------------------------------------------------------
@@ -1546,6 +1709,7 @@ class CallSession {
         type: 'tts',
         provider: 'deepgram',
         model: AURA_MODEL,
+        source: 'call',
         chars: text.length,
         durationMs: Date.now() - start,
         estimatedCost: estimateCost(AURA_MODEL, { chars: text.length }),
@@ -1661,6 +1825,7 @@ class CallSession {
         type: 'stt',
         provider: 'deepgram',
         model: 'nova-2-phonecall',
+        source: 'call',
         durationMs,
         estimatedCost: estimateCost('nova-2-phonecall', { durationMs }),
       });

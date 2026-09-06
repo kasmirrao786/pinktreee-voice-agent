@@ -88,6 +88,7 @@
     <div class="tab" data-tab="analytics">Analytics</div>
     <div class="tab" data-tab="settings">Settings</div>
     <div class="tab" data-tab="costs">Costs</div>
+    <div class="tab" data-tab="bulktest">Bulk Test</div>
   </div>
 
   <!-- Voice Test -->
@@ -231,6 +232,32 @@
     <div class="empty" id="costsEmpty" style="display:none;">No requests logged yet.</div>
   </div>
 
+  <!-- Bulk Test -->
+  <div class="panel" id="panel-bulktest">
+    <div style="font-size:12px; color:#888; margin-bottom:10px;">
+      Runs a handful of canned caller scripts (not interested, full qualify-to-book,
+      gatekeeper, pricing objection, opt-out) through the real LLM+TTS pipeline -
+      no phone call, no Twilio. Costs real API money for each run, but nothing
+      close to a real call. Results are kept separate from your real-call
+      Analytics/Costs data.
+    </div>
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
+      <label style="font-size:13px;">Repeats: <input id="bulkRepeats" type="number" value="1" min="1" max="5" style="width:50px; padding:6px;" /></label>
+      <button id="bulkRunBtn">Run bulk test</button>
+      <span id="bulkStatus" style="font-size:12px; color:#888;"></span>
+    </div>
+
+    <div id="bulkLatestResult"></div>
+
+    <h3 class="sectionTitle">Past runs</h3>
+    <span class="refresh" onclick="loadBulkTestRuns()">refresh</span>
+    <table id="bulkRunsTable">
+      <thead><tr><th>Time</th><th>TTS</th><th>LLM model</th><th>Scripts</th><th>Total cost</th><th>Avg latency</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="empty" id="bulkRunsEmpty" style="display:none;">No bulk test runs yet.</div>
+  </div>
+
 <script>
   // ---- Tabs ----
   document.querySelectorAll('.tab').forEach((tab) => {
@@ -246,6 +273,7 @@
       if (tab.dataset.tab === 'analytics') loadAnalytics();
       if (tab.dataset.tab === 'settings') loadTtsConfig();
       if (tab.dataset.tab === 'costs') loadCosts();
+      if (tab.dataset.tab === 'bulktest') loadBulkTestRuns();
     });
   });
 
@@ -679,6 +707,69 @@
     ).join('');
 
     document.getElementById('costsEmpty').style.display = logs.length ? 'none' : 'block';
+  }
+
+  // ---- Bulk Test ----
+  function formatCost2(n) {
+    if (n == null) return '—';
+    return n < 0.01 ? '$' + n.toFixed(5) : '$' + n.toFixed(4);
+  }
+
+  document.getElementById('bulkRunBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('bulkRunBtn');
+    const status = document.getElementById('bulkStatus');
+    const repeats = parseInt(document.getElementById('bulkRepeats').value, 10) || 1;
+    btn.disabled = true;
+    status.textContent = 'running ' + repeats + ' pass(es) through 5 scripts - this takes a bit and costs real API usage...';
+
+    try {
+      const res = await fetch('/admin/bulk-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repeats }),
+      });
+      const data = await res.json();
+      if (data.error) { status.textContent = 'Error: ' + data.error; return; }
+
+      status.textContent = 'done';
+      const s = data.summary;
+      const byTypeHtml = Object.entries(s.byType).map(([type, v]) =>
+        '<div class="statCard"><div class="num">' + formatCost2(v.cost) + '</div><div class="label">' + type + ' (' + v.requests + ' req)</div></div>'
+      ).join('');
+      document.getElementById('bulkLatestResult').innerHTML =
+        '<h3 class="sectionTitle" style="margin-top:0;">Latest run - ' + s.ttsConfig.provider + '/' + s.ttsConfig.model + ', ' + s.llmModel + '</h3>' +
+        '<div class="statGrid">' +
+        '<div class="statCard"><div class="num">' + formatCost2(s.totalCost) + '</div><div class="label">Total cost</div></div>' +
+        '<div class="statCard"><div class="num">' + s.avgLatencyMs + 'ms</div><div class="label">Avg latency/request</div></div>' +
+        '<div class="statCard"><div class="num">' + s.scriptsRun + '</div><div class="label">Scripts run</div></div>' +
+        byTypeHtml + '</div>' +
+        '<audio controls src="/bulk-test-samples/' + s.runId + '.wav" style="width:100%; margin-top:10px;"></audio>';
+
+      loadBulkTestRuns();
+    } catch (err) {
+      status.textContent = 'Error: ' + err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function loadBulkTestRuns() {
+    const res = await fetch('/admin/bulk-test-runs');
+    const runs = await res.json();
+    const tbody = document.querySelector('#bulkRunsTable tbody');
+    tbody.innerHTML = '';
+    document.getElementById('bulkRunsEmpty').style.display = runs.length ? 'none' : 'block';
+    runs.forEach((r) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + new Date(r.ts).toLocaleString() + '</td>' +
+        '<td>' + r.ttsConfig.provider + '/' + r.ttsConfig.model + '</td>' +
+        '<td>' + r.llmModel + '</td>' +
+        '<td>' + r.scriptsRun + '</td>' +
+        '<td>' + formatCost2(r.totalCost) + '</td>' +
+        '<td>' + r.avgLatencyMs + 'ms</td>';
+      tbody.appendChild(tr);
+    });
   }
 </script>
 </body>

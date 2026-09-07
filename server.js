@@ -446,9 +446,9 @@ async function callLLMStream({ system, messages, maxTokens = 200, onSentence, mo
 // Raw mu-law/8kHz synthesis (no streaming) - the shared primitive behind
 // backchannel clips, fallback clips, and prefetched sentence audio during
 // live calls. All three want the same encoding, just at different times.
-async function synthesizeSpeechMulaw(text) {
+async function synthesizeSpeechMulaw(text, model = AURA_MODEL) {
   const res = await fetch(
-    `https://api.deepgram.com/v1/speak?model=${AURA_MODEL}&encoding=mulaw&sample_rate=8000&container=none`,
+    `https://api.deepgram.com/v1/speak?model=${model}&encoding=mulaw&sample_rate=8000&container=none`,
     {
       method: 'POST',
       headers: { Authorization: `Token ${DEEPGRAM_API_KEY}`, 'Content-Type': 'application/json' },
@@ -710,17 +710,23 @@ async function fetchLiveSentenceAudio(text, source = 'call') {
     const rawAudio = Buffer.from(await res.arrayBuffer());
     buffer = await transcodeToMulaw8k(rawAudio);
   } else {
-    buffer = await synthesizeSpeechMulaw(text);
+    // Falls back to the AURA_MODEL env default if the saved config's model
+    // doesn't look like a Deepgram Aura model - covers the case where it
+    // was left over from switching provider away from OpenRouter in the
+    // admin panel without also resetting the model field.
+    const deepgramModel = ttsConfig.model?.startsWith('aura') ? ttsConfig.model : AURA_MODEL;
+    buffer = await synthesizeSpeechMulaw(text, deepgramModel);
   }
 
+  const resolvedModel = ttsConfig.provider === 'openrouter' ? ttsConfig.model : (ttsConfig.model?.startsWith('aura') ? ttsConfig.model : AURA_MODEL);
   logRequestEvent({
     type: 'tts',
     provider: ttsConfig.provider,
-    model: ttsConfig.provider === 'openrouter' ? ttsConfig.model : AURA_MODEL,
+    model: resolvedModel,
     source,
     chars: text.length,
     durationMs: Date.now() - start,
-    estimatedCost: estimateCost(ttsConfig.provider === 'openrouter' ? ttsConfig.model : AURA_MODEL, { chars: text.length }),
+    estimatedCost: estimateCost(resolvedModel, { chars: text.length }),
   });
 
   return buffer;
@@ -1245,10 +1251,19 @@ app.post('/admin/bulk-test', async (req, res) => {
     const totalRequests = logs.length;
     const avgLatencyMs = totalRequests ? Math.round(logs.reduce((s, e) => s + (e.durationMs || 0), 0) / totalRequests) : 0;
 
+    // Read the actual provider/model back off a logged TTS request rather
+    // than snapshotting ttsConfig directly - guarantees this always matches
+    // what was really billed, even if the saved config was ever left in an
+    // inconsistent state (see fetchLiveSentenceAudio's fallback logic).
+    const sampleTtsLog = logs.find((e) => e.type === 'tts');
+    const resolvedTts = sampleTtsLog
+      ? { provider: sampleTtsLog.provider, model: sampleTtsLog.model }
+      : { ...ttsConfig };
+
     const summary = {
       runId,
       ts: new Date().toISOString(),
-      ttsConfig: { ...ttsConfig },
+      ttsConfig: resolvedTts,
       llmModel: OPENROUTER_MODEL,
       scriptsRun: results.length,
       totalCost,

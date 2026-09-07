@@ -677,6 +677,19 @@
     ttsStatus.textContent = '(default)';
   });
 
+  // Auto-fill a sensible model when switching providers, so you can't end
+  // up with a saved config like {provider: deepgram, model: hexgrad/kokoro-82m}
+  // left over from a previous selection - that combination silently used
+  // to fall back to a hardcoded default without telling you.
+  ttsProvider.addEventListener('change', () => {
+    if (ttsProvider.value === 'deepgram' && !ttsModel.value.startsWith('aura')) {
+      ttsModel.value = 'aura-asteria-en';
+      ttsVoice.value = '';
+    } else if (ttsProvider.value === 'openrouter' && ttsModel.value.startsWith('aura')) {
+      ttsModel.value = 'hexgrad/kokoro-82m';
+    }
+  });
+
   // ---- Costs ----
   function formatCost(n) {
     if (n == null) return '—';

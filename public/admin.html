@@ -196,9 +196,13 @@
       <select id="ttsProvider" style="padding:8px; font-size:13px;">
         <option value="deepgram">Deepgram (Aura)</option>
         <option value="openrouter">OpenRouter</option>
+        <option value="self_hosted">Self-hosted (Kokoro-FastAPI or similar)</option>
       </select>
       <input id="ttsModel" placeholder="model id" style="padding:8px; font-size:13px; flex:1; min-width:180px;" />
       <input id="ttsVoice" placeholder="voice (optional)" style="padding:8px; font-size:13px; width:140px;" />
+    </div>
+    <div id="ttsBaseUrlRow" style="display:none; margin-bottom:8px;">
+      <input id="ttsBaseUrl" placeholder="http://your-kokoro-service:8880 (internal Coolify URL is fastest)" style="padding:8px; font-size:13px; width:100%;" />
     </div>
     <div class="scriptActions">
       <button id="ttsSaveBtn">Save</button>
@@ -208,10 +212,56 @@
     <div style="font-size:11px; color:#999; margin-top:10px;">
       Examples — Deepgram: model <code>aura-asteria-en</code>, no voice needed.
       OpenRouter: model <code>hexgrad/kokoro-82m</code>, voice e.g. <code>af_bella</code>.
+      Self-hosted: model <code>kokoro</code>, base URL pointing at your deployed
+      Kokoro-FastAPI service (use the internal/private network address if your
+      TTS service and this app are on the same host - it's meaningfully
+      faster than routing out over the public internet and back).
       <br/>Note: OpenRouter TTS hasn't been confirmed to support true
       low-latency streaming the way Aura does - the first sentence of a
       reply may take a bit longer to start playing when OpenRouter is
       selected. Test it in the Voice Test tab before trusting it on real calls.
+    </div>
+
+    <h3 class="sectionTitle">General settings</h3>
+    <div style="font-size:12px; color:#888; margin-bottom:10px;">
+      Operational config only — no credentials. Account SIDs, auth tokens,
+      and API keys stay in your host's environment variables (Coolify/Railway),
+      never here, since this panel has no login yet.
+      <br/>If you're on Twilio BYOC with Telnyx underneath, there's nothing
+      to configure here for that specifically — BYOC is set up in the
+      Twilio console and is invisible to this app; it still just talks to
+      Twilio's API either way.
+    </div>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
+      <label style="font-size:12px; color:#555;">Outbound caller ID
+        <input id="cfgCallerId" placeholder="+15551234567" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
+      </label>
+      <label style="font-size:12px; color:#555;">Max concurrent calls
+        <input id="cfgMaxConcurrent" type="number" min="1" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
+      </label>
+      <label style="font-size:12px; color:#555;">Calling hours timezone
+        <input id="cfgCallHoursTz" placeholder="America/New_York" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
+      </label>
+      <label style="font-size:12px; color:#555;">Calling hours (24h, start–end)
+        <div style="display:flex; gap:6px; margin-top:4px;">
+          <input id="cfgCallHoursStart" type="number" min="0" max="23" style="width:100%; padding:8px; font-size:13px;" />
+          <input id="cfgCallHoursEnd" type="number" min="0" max="23" style="width:100%; padding:8px; font-size:13px;" />
+        </div>
+      </label>
+      <label style="font-size:12px; color:#555;">Conversation LLM model
+        <input id="cfgLlmModel" placeholder="anthropic/claude-sonnet-4.5" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
+      </label>
+      <label style="font-size:12px; color:#555;">Classifier model (cheap, post-call only)
+        <input id="cfgClassifierModel" placeholder="anthropic/claude-haiku-4.5" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
+      </label>
+      <label style="font-size:12px; color:#555;">Turn-detection wait (ms)
+        <input id="cfgUtteranceEndMs" type="number" min="200" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
+      </label>
+    </div>
+    <div class="scriptActions">
+      <button id="cfgSaveBtn">Save</button>
+      <button id="cfgResetBtn" type="button">Reset to default</button>
+      <span id="cfgStatus"></span>
     </div>
   </div>
 
@@ -271,7 +321,7 @@
       if (tab.dataset.tab === 'script') loadScript();
       if (tab.dataset.tab === 'contacts') loadContacts();
       if (tab.dataset.tab === 'analytics') loadAnalytics();
-      if (tab.dataset.tab === 'settings') loadTtsConfig();
+      if (tab.dataset.tab === 'settings') { loadTtsConfig(); loadAppConfig(); }
       if (tab.dataset.tab === 'costs') loadCosts();
       if (tab.dataset.tab === 'bulktest') loadBulkTestRuns();
     });
@@ -472,13 +522,28 @@
   const openingStatus = document.getElementById('openingStatus');
 
   async function loadScript() {
-    const [scriptRes, openingRes] = await Promise.all([fetch('/admin/script'), fetch('/admin/opening')]);
-    const scriptData = await scriptRes.json();
-    const openingData = await openingRes.json();
-    scriptEditor.value = scriptData.prompt || '';
-    scriptStatus.textContent = scriptData.isDefault ? '(default script)' : '(edited)';
-    openingEditor.value = openingData.template || '';
-    openingStatus.textContent = openingData.isDefault ? '(default)' : '(edited)';
+    const results = await Promise.allSettled([fetch('/admin/script'), fetch('/admin/opening')]);
+
+    const [scriptResult, openingResult] = results;
+    if (scriptResult.status === 'fulfilled' && scriptResult.value.ok) {
+      const scriptData = await scriptResult.value.json();
+      scriptEditor.value = scriptData.prompt || '';
+      scriptStatus.textContent = scriptData.prompt
+        ? (scriptData.isDefault ? '(default script)' : '(edited)')
+        : '(server returned an empty script - check server logs)';
+    } else {
+      scriptStatus.textContent = 'Error loading script - is the server reachable?';
+    }
+
+    if (openingResult.status === 'fulfilled' && openingResult.value.ok) {
+      const openingData = await openingResult.value.json();
+      openingEditor.value = openingData.template || '';
+      openingStatus.textContent = openingData.template
+        ? (openingData.isDefault ? '(default)' : '(edited)')
+        : '(server returned an empty template - check server logs)';
+    } else {
+      openingStatus.textContent = 'Error loading opening line - is the server reachable?';
+    }
   }
 
   document.getElementById('scriptSaveBtn').addEventListener('click', async () => {
@@ -645,7 +710,13 @@
   const ttsProvider = document.getElementById('ttsProvider');
   const ttsModel = document.getElementById('ttsModel');
   const ttsVoice = document.getElementById('ttsVoice');
+  const ttsBaseUrl = document.getElementById('ttsBaseUrl');
+  const ttsBaseUrlRow = document.getElementById('ttsBaseUrlRow');
   const ttsStatus = document.getElementById('ttsStatus');
+
+  function updateBaseUrlVisibility() {
+    ttsBaseUrlRow.style.display = ttsProvider.value === 'self_hosted' ? 'block' : 'none';
+  }
 
   async function loadTtsConfig() {
     const res = await fetch('/admin/tts-config');
@@ -653,6 +724,8 @@
     ttsProvider.value = data.config.provider;
     ttsModel.value = data.config.model;
     ttsVoice.value = data.config.voice || '';
+    ttsBaseUrl.value = data.config.baseUrl || '';
+    updateBaseUrlVisibility();
     ttsStatus.textContent = data.isDefault ? '(default)' : '(edited)';
   }
 
@@ -661,7 +734,12 @@
     const res = await fetch('/admin/tts-config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider: ttsProvider.value, model: ttsModel.value, voice: ttsVoice.value || null }),
+      body: JSON.stringify({
+        provider: ttsProvider.value,
+        model: ttsModel.value,
+        voice: ttsVoice.value || null,
+        baseUrl: ttsProvider.value === 'self_hosted' ? ttsBaseUrl.value : null,
+      }),
     });
     ttsStatus.textContent = res.ok ? 'saved' : 'error saving';
     setTimeout(() => { if (ttsStatus.textContent === 'saved') ttsStatus.textContent = '(edited)'; }, 1500);
@@ -674,6 +752,8 @@
     ttsProvider.value = data.config.provider;
     ttsModel.value = data.config.model;
     ttsVoice.value = data.config.voice || '';
+    ttsBaseUrl.value = '';
+    updateBaseUrlVisibility();
     ttsStatus.textContent = '(default)';
   });
 
@@ -682,12 +762,81 @@
   // left over from a previous selection - that combination silently used
   // to fall back to a hardcoded default without telling you.
   ttsProvider.addEventListener('change', () => {
+    updateBaseUrlVisibility();
     if (ttsProvider.value === 'deepgram' && !ttsModel.value.startsWith('aura')) {
       ttsModel.value = 'aura-asteria-en';
       ttsVoice.value = '';
     } else if (ttsProvider.value === 'openrouter' && ttsModel.value.startsWith('aura')) {
       ttsModel.value = 'hexgrad/kokoro-82m';
+    } else if (ttsProvider.value === 'self_hosted' && !ttsModel.value) {
+      ttsModel.value = 'kokoro';
     }
+  });
+
+  // ---- General settings (app config) ----
+  const cfgCallerId = document.getElementById('cfgCallerId');
+  const cfgMaxConcurrent = document.getElementById('cfgMaxConcurrent');
+  const cfgCallHoursTz = document.getElementById('cfgCallHoursTz');
+  const cfgCallHoursStart = document.getElementById('cfgCallHoursStart');
+  const cfgCallHoursEnd = document.getElementById('cfgCallHoursEnd');
+  const cfgLlmModel = document.getElementById('cfgLlmModel');
+  const cfgClassifierModel = document.getElementById('cfgClassifierModel');
+  const cfgUtteranceEndMs = document.getElementById('cfgUtteranceEndMs');
+  const cfgStatus = document.getElementById('cfgStatus');
+
+  function fillAppConfigForm(c) {
+    cfgCallerId.value = c.twilioPhoneNumber || '';
+    cfgMaxConcurrent.value = c.maxConcurrentCalls;
+    cfgCallHoursTz.value = c.callHoursTz;
+    cfgCallHoursStart.value = c.callHoursStart;
+    cfgCallHoursEnd.value = c.callHoursEnd;
+    cfgLlmModel.value = c.openRouterModel;
+    cfgClassifierModel.value = c.classifierModel;
+    cfgUtteranceEndMs.value = c.utteranceEndMs;
+  }
+
+  async function loadAppConfig() {
+    try {
+      const res = await fetch('/admin/app-config');
+      if (!res.ok) throw new Error('request failed');
+      const data = await res.json();
+      fillAppConfigForm(data.config);
+      cfgStatus.textContent = data.isDefault ? '(default)' : '(edited)';
+    } catch (err) {
+      cfgStatus.textContent = 'Error loading settings - is the server reachable?';
+    }
+  }
+
+  document.getElementById('cfgSaveBtn').addEventListener('click', async () => {
+    cfgStatus.textContent = 'saving...';
+    try {
+      const res = await fetch('/admin/app-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          twilioPhoneNumber: cfgCallerId.value || null,
+          maxConcurrentCalls: cfgMaxConcurrent.value,
+          callHoursTz: cfgCallHoursTz.value,
+          callHoursStart: cfgCallHoursStart.value,
+          callHoursEnd: cfgCallHoursEnd.value,
+          openRouterModel: cfgLlmModel.value,
+          classifierModel: cfgClassifierModel.value,
+          utteranceEndMs: cfgUtteranceEndMs.value,
+        }),
+      });
+      cfgStatus.textContent = res.ok ? 'saved' : 'error saving';
+      setTimeout(() => { if (cfgStatus.textContent === 'saved') cfgStatus.textContent = '(edited)'; }, 1500);
+    } catch (err) {
+      cfgStatus.textContent = 'Error: ' + err.message;
+    }
+  });
+
+  document.getElementById('cfgResetBtn').addEventListener('click', async () => {
+    if (!confirm('Reset general settings to defaults (from environment variables)?')) return;
+    const res = await fetch('/admin/app-config/reset', { method: 'POST' });
+    const data = await res.json();
+    fillAppConfigForm(data.config);
+    cfgStatus.textContent = '(default)';
   });
 
   // ---- Costs ----
@@ -749,10 +898,13 @@
       const byTypeHtml = Object.entries(s.byType).map(([type, v]) =>
         '<div class="statCard"><div class="num">' + formatCost2(v.cost) + '</div><div class="label">' + type + ' (' + v.requests + ' req)</div></div>'
       ).join('');
+      const costNote = s.unknownCostRequests > 0
+        ? ' <span style="color:#c33; font-weight:400; font-size:11px;">(' + s.unknownCostRequests + ' request(s) used a model not in the pricing table - this total is a floor, not the real cost)</span>'
+        : '';
       document.getElementById('bulkLatestResult').innerHTML =
         '<h3 class="sectionTitle" style="margin-top:0;">Latest run - ' + s.ttsConfig.provider + '/' + s.ttsConfig.model + ', ' + s.llmModel + '</h3>' +
         '<div class="statGrid">' +
-        '<div class="statCard"><div class="num">' + formatCost2(s.totalCost) + '</div><div class="label">Total cost</div></div>' +
+        '<div class="statCard"><div class="num">' + formatCost2(s.totalCost) + '</div><div class="label">Total cost' + costNote + '</div></div>' +
         '<div class="statCard"><div class="num">' + s.avgLatencyMs + 'ms</div><div class="label">Avg latency/request</div></div>' +
         '<div class="statCard"><div class="num">' + s.scriptsRun + '</div><div class="label">Scripts run</div></div>' +
         byTypeHtml + '</div>' +
@@ -774,12 +926,13 @@
     document.getElementById('bulkRunsEmpty').style.display = runs.length ? 'none' : 'block';
     runs.forEach((r) => {
       const tr = document.createElement('tr');
+      const costDisplay = formatCost2(r.totalCost) + (r.unknownCostRequests > 0 ? ' *' : '');
       tr.innerHTML =
         '<td>' + new Date(r.ts).toLocaleString() + '</td>' +
         '<td>' + r.ttsConfig.provider + '/' + r.ttsConfig.model + '</td>' +
         '<td>' + r.llmModel + '</td>' +
         '<td>' + r.scriptsRun + '</td>' +
-        '<td>' + formatCost2(r.totalCost) + '</td>' +
+        '<td title="' + (r.unknownCostRequests > 0 ? r.unknownCostRequests + ' request(s) used an unpriced model - this is a floor, not the real total' : '') + '">' + costDisplay + '</td>' +
         '<td>' + r.avgLatencyMs + 'ms</td>';
       tbody.appendChild(tr);
     });

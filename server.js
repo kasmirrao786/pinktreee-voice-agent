@@ -73,6 +73,7 @@ const SCRIPT_PATH = path.join(DATA_DIR, 'system_prompt.txt');
 const OPENING_PATH = path.join(DATA_DIR, 'opening_line.txt');
 const TTS_CONFIG_PATH = path.join(DATA_DIR, 'tts_config.json');
 const REQUEST_LOG_PATH = path.join(DATA_DIR, 'request_logs.jsonl');
+const APP_CONFIG_PATH = path.join(DATA_DIR, 'app_config.json');
 
 function ensureDataFiles() {
   fsSync.mkdirSync(DATA_DIR, { recursive: true });
@@ -167,6 +168,10 @@ const MODEL_PRICING = {
   'aura-2': { type: 'tts', perChar: 0.03 / 1000 },
   'hexgrad/kokoro-82m': { type: 'tts', perChar: 0.62 / 1e6 },
   'openai/gpt-4o-mini-tts': { type: 'tts', perChar: 15 / 1e6 }, // conservative - published figures for this model conflicted between sources
+  // Self-hosted (e.g. Kokoro-FastAPI) has no per-request billing - cost is
+  // your hosting bill, not something to track per-call. $0 here is
+  // deliberate and correct, unlike an untracked model returning null/unknown.
+  'kokoro': { type: 'tts', perChar: 0 },
   // STT - $ per minute of audio
   'nova-2-phonecall': { type: 'stt', perMinute: 0.006 },
 };
@@ -272,6 +277,40 @@ const {
 const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 const deepgram = createDeepgramClient(DEEPGRAM_API_KEY);
 
+// ---- Operational settings - admin-editable, hot-reloadable ----------------
+// Deliberately NOT here: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN,
+// DEEPGRAM_API_KEY, OPENROUTER_API_KEY - credentials stay in env vars only.
+// The admin panel has no login yet, so anything editable there is
+// effectively public; a phone number or a model name being visible is
+// fine, an API key being visible is not. These env vars below are only the
+// *initial* seed value - after first boot, admin-panel edits (persisted to
+// DATA_DIR/app_config.json) take over and apply without a redeploy.
+const DEFAULT_APP_CONFIG = {
+  twilioPhoneNumber: TWILIO_PHONE_NUMBER || null, // the outbound caller ID - not a credential, just a number
+  callHoursTz: CALL_HOURS_TZ,
+  callHoursStart: parseInt(CALL_HOURS_START, 10),
+  callHoursEnd: parseInt(CALL_HOURS_END, 10),
+  maxConcurrentCalls: parseInt(MAX_CONCURRENT_CALLS, 10),
+  openRouterModel: OPENROUTER_MODEL,
+  classifierModel: CLASSIFIER_MODEL,
+  utteranceEndMs: parseInt(UTTERANCE_END_MS, 10),
+};
+let appConfig = { ...DEFAULT_APP_CONFIG };
+
+function loadAppConfig() {
+  const existing = fsSync.existsSync(APP_CONFIG_PATH) ? fsSync.readFileSync(APP_CONFIG_PATH, 'utf-8') : '';
+  if (existing.trim()) {
+    try {
+      appConfig = { ...DEFAULT_APP_CONFIG, ...JSON.parse(existing) };
+      return;
+    } catch {
+      // fall through to reseed below
+    }
+  }
+  fsSync.writeFileSync(APP_CONFIG_PATH, JSON.stringify(DEFAULT_APP_CONFIG, null, 2));
+  appConfig = { ...DEFAULT_APP_CONFIG };
+}
+
 // ---- TTS, via Deepgram Aura ------------------------------------------------
 // One vendor for both STT and TTS (same DEEPGRAM_API_KEY). Used by live
 // calls (streaming, mu-law/8kHz to match Twilio directly), the voicemail
@@ -309,7 +348,7 @@ function buildSystemMessage(system) {
 
 // ---- LLM brain, via OpenRouter (OpenAI-compatible chat completions) -------
 // Used both by live calls and the no-Twilio /test chat panel below.
-async function callLLM({ system, messages, maxTokens = 200, model = OPENROUTER_MODEL, source = 'call' }) {
+async function callLLM({ system, messages, maxTokens = 200, model = appConfig.openRouterModel, source = 'call' }) {
   const start = Date.now();
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -355,7 +394,7 @@ async function callLLM({ system, messages, maxTokens = 200, model = OPENROUTER_M
 // single biggest latency win available here: time-to-first-audio drops from
 // "however long the full reply takes to generate" to "however long the
 // first sentence takes."
-async function callLLMStream({ system, messages, maxTokens = 200, onSentence, model = OPENROUTER_MODEL, source = 'call' }) {
+async function callLLMStream({ system, messages, maxTokens = 200, onSentence, model = appConfig.openRouterModel, source = 'call' }) {
   const start = Date.now();
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
@@ -540,12 +579,12 @@ const activeCallSids = new Set();
 // across timezones tied to the callee's location rather than a single one.
 function isWithinCallingHours() {
   const hourStr = new Intl.DateTimeFormat('en-US', {
-    timeZone: CALL_HOURS_TZ,
+    timeZone: appConfig.callHoursTz,
     hour: 'numeric',
     hour12: false,
   }).format(new Date());
   const hour = parseInt(hourStr, 10);
-  return hour >= parseInt(CALL_HOURS_START, 10) && hour < parseInt(CALL_HOURS_END, 10);
+  return hour >= appConfig.callHoursStart && hour < appConfig.callHoursEnd;
 }
 
 // ---- Sales script / system prompt -----------------------------------------
@@ -626,9 +665,14 @@ VOICEMAIL
 let systemPrompt = DEFAULT_SYSTEM_PROMPT;
 
 function loadSystemPrompt() {
-  if (fsSync.existsSync(SCRIPT_PATH)) {
-    systemPrompt = fsSync.readFileSync(SCRIPT_PATH, 'utf-8');
+  const existing = fsSync.existsSync(SCRIPT_PATH) ? fsSync.readFileSync(SCRIPT_PATH, 'utf-8') : '';
+  if (existing.trim()) {
+    systemPrompt = existing;
   } else {
+    // File missing OR present-but-empty (e.g. a volume mount that
+    // pre-creates an empty placeholder file before the app's first write) -
+    // either way, seed it with the real default instead of silently
+    // running on an empty script.
     fsSync.writeFileSync(SCRIPT_PATH, DEFAULT_SYSTEM_PROMPT);
     systemPrompt = DEFAULT_SYSTEM_PROMPT;
   }
@@ -651,8 +695,9 @@ const DEFAULT_OPENING_TEMPLATE =
 let openingTemplate = DEFAULT_OPENING_TEMPLATE;
 
 function loadOpeningTemplate() {
-  if (fsSync.existsSync(OPENING_PATH)) {
-    openingTemplate = fsSync.readFileSync(OPENING_PATH, 'utf-8');
+  const existing = fsSync.existsSync(OPENING_PATH) ? fsSync.readFileSync(OPENING_PATH, 'utf-8') : '';
+  if (existing.trim()) {
+    openingTemplate = existing;
   } else {
     fsSync.writeFileSync(OPENING_PATH, DEFAULT_OPENING_TEMPLATE);
     openingTemplate = DEFAULT_OPENING_TEMPLATE;
@@ -665,7 +710,7 @@ function loadOpeningTemplate() {
 // is fixed and negligible regardless of which provider is picked here. This
 // setting only controls the per-sentence TTS used during actual live
 // conversation, which is the part that scales with call volume/cost.
-const DEFAULT_TTS_CONFIG = { provider: 'deepgram', model: 'aura-asteria-en', voice: null };
+const DEFAULT_TTS_CONFIG = { provider: 'deepgram', model: 'aura-asteria-en', voice: null, baseUrl: null };
 let ttsConfig = { ...DEFAULT_TTS_CONFIG };
 
 function loadTtsConfig() {
@@ -709,6 +754,28 @@ async function fetchLiveSentenceAudio(text, source = 'call') {
     }
     const rawAudio = Buffer.from(await res.arrayBuffer());
     buffer = await transcodeToMulaw8k(rawAudio);
+  } else if (ttsConfig.provider === 'self_hosted') {
+    // Any OpenAI-compatible /v1/audio/speech server - built for Kokoro-FastAPI
+    // (github.com/remsky/Kokoro-FastAPI) specifically, but works with anything
+    // exposing the same shape. No proxy hop, no per-character billing - just
+    // your own hosted latency (which is the whole point of self-hosting).
+    if (!ttsConfig.baseUrl) throw new Error('self_hosted TTS provider has no baseUrl configured');
+    const res = await fetch(`${ttsConfig.baseUrl.replace(/\/$/, '')}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: ttsConfig.model || 'kokoro',
+        input: text,
+        ...(ttsConfig.voice ? { voice: ttsConfig.voice } : {}),
+        response_format: 'wav', // self-describing, and skips a compression step the provider would otherwise spend time on
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Self-hosted TTS failed: ${res.status} ${errText}`);
+    }
+    const rawAudio = Buffer.from(await res.arrayBuffer());
+    buffer = await transcodeToMulaw8k(rawAudio);
   } else {
     // Falls back to the AURA_MODEL env default if the saved config's model
     // doesn't look like a Deepgram Aura model - covers the case where it
@@ -718,7 +785,10 @@ async function fetchLiveSentenceAudio(text, source = 'call') {
     buffer = await synthesizeSpeechMulaw(text, deepgramModel);
   }
 
-  const resolvedModel = ttsConfig.provider === 'openrouter' ? ttsConfig.model : (ttsConfig.model?.startsWith('aura') ? ttsConfig.model : AURA_MODEL);
+  const resolvedModel =
+    ttsConfig.provider === 'deepgram'
+      ? (ttsConfig.model?.startsWith('aura') ? ttsConfig.model : AURA_MODEL)
+      : (ttsConfig.model || 'kokoro');
   logRequestEvent({
     type: 'tts',
     provider: ttsConfig.provider,
@@ -773,11 +843,14 @@ app.post('/call', async (req, res) => {
   }
   if (!isWithinCallingHours()) {
     return res.status(403).json({
-      error: `outside allowed calling hours (${CALL_HOURS_START}:00-${CALL_HOURS_END}:00 ${CALL_HOURS_TZ})`,
+      error: `outside allowed calling hours (${appConfig.callHoursStart}:00-${appConfig.callHoursEnd}:00 ${appConfig.callHoursTz})`,
     });
   }
-  if (activeCallSids.size >= parseInt(MAX_CONCURRENT_CALLS, 10)) {
+  if (activeCallSids.size >= appConfig.maxConcurrentCalls) {
     return res.status(429).json({ error: 'at max concurrent call capacity, try again shortly' });
+  }
+  if (!appConfig.twilioPhoneNumber) {
+    return res.status(500).json({ error: 'no outbound caller ID configured - set it in Settings or TWILIO_PHONE_NUMBER' });
   }
 
   // Already called this number before? Block unless the caller explicitly
@@ -796,7 +869,7 @@ app.post('/call', async (req, res) => {
   try {
     const call = await twilioClient.calls.create({
       to,
-      from: TWILIO_PHONE_NUMBER,
+      from: appConfig.twilioPhoneNumber,
       url: `https://${PUBLIC_HOSTNAME}/voice`, // Twilio fetches TwiML from here once answered
       // Synchronous machine detection: Twilio delays connecting the call
       // until it decides human vs. machine, then passes AnsweredBy to /voice.
@@ -967,9 +1040,12 @@ app.get('/admin/tts-config', (req, res) => {
 });
 
 app.post('/admin/tts-config', (req, res) => {
-  const { provider, model, voice } = req.body;
+  const { provider, model, voice, baseUrl } = req.body;
   if (!provider || !model) return res.status(400).json({ error: 'missing "provider" or "model"' });
-  ttsConfig = { provider, model, voice: voice || null };
+  if (provider === 'self_hosted' && !baseUrl) {
+    return res.status(400).json({ error: 'self_hosted provider requires a "baseUrl"' });
+  }
+  ttsConfig = { provider, model, voice: voice || null, baseUrl: baseUrl || null };
   fsSync.writeFileSync(TTS_CONFIG_PATH, JSON.stringify(ttsConfig, null, 2));
   res.sendStatus(204);
 });
@@ -978,6 +1054,38 @@ app.post('/admin/tts-config/reset', (req, res) => {
   ttsConfig = { ...DEFAULT_TTS_CONFIG };
   fsSync.writeFileSync(TTS_CONFIG_PATH, JSON.stringify(ttsConfig, null, 2));
   res.json({ config: ttsConfig });
+});
+
+// ---- Operational settings (non-secret) -------------------------------------
+// Caller ID, calling hours, concurrency cap, model choices, turn-detection
+// timing. Deliberately excludes anything credential-shaped (Account SID,
+// Auth Token, API keys) - those stay in env vars since this panel has no
+// login yet. Changes apply immediately, no redeploy needed.
+app.get('/admin/app-config', (req, res) => {
+  res.json({ config: appConfig, isDefault: JSON.stringify(appConfig) === JSON.stringify(DEFAULT_APP_CONFIG) });
+});
+
+app.post('/admin/app-config', (req, res) => {
+  const { twilioPhoneNumber, callHoursTz, callHoursStart, callHoursEnd, maxConcurrentCalls, openRouterModel, classifierModel, utteranceEndMs } = req.body;
+  const next = {
+    twilioPhoneNumber: twilioPhoneNumber || null,
+    callHoursTz: callHoursTz || DEFAULT_APP_CONFIG.callHoursTz,
+    callHoursStart: Number.isFinite(+callHoursStart) ? +callHoursStart : DEFAULT_APP_CONFIG.callHoursStart,
+    callHoursEnd: Number.isFinite(+callHoursEnd) ? +callHoursEnd : DEFAULT_APP_CONFIG.callHoursEnd,
+    maxConcurrentCalls: Number.isFinite(+maxConcurrentCalls) ? +maxConcurrentCalls : DEFAULT_APP_CONFIG.maxConcurrentCalls,
+    openRouterModel: openRouterModel || DEFAULT_APP_CONFIG.openRouterModel,
+    classifierModel: classifierModel || DEFAULT_APP_CONFIG.classifierModel,
+    utteranceEndMs: Number.isFinite(+utteranceEndMs) ? +utteranceEndMs : DEFAULT_APP_CONFIG.utteranceEndMs,
+  };
+  appConfig = next;
+  fsSync.writeFileSync(APP_CONFIG_PATH, JSON.stringify(appConfig, null, 2));
+  res.sendStatus(204);
+});
+
+app.post('/admin/app-config/reset', (req, res) => {
+  appConfig = { ...DEFAULT_APP_CONFIG };
+  fsSync.writeFileSync(APP_CONFIG_PATH, JSON.stringify(appConfig, null, 2));
+  res.json({ config: appConfig });
 });
 
 // ---- Request logs + cost summary ------------------------------------------
@@ -1208,7 +1316,7 @@ async function runBulkTestScript(script, source, saveSample) {
       system: systemPrompt,
       messages: history,
       maxTokens: 150,
-      model: OPENROUTER_MODEL,
+      model: appConfig.openRouterModel,
       source,
       onSentence: (sentence) => {
         fullReply += (fullReply ? ' ' : '') + sentence;
@@ -1242,10 +1350,12 @@ app.post('/admin/bulk-test', async (req, res) => {
 
     const logs = readAllRequestLogs().filter((e) => e.source === runId);
     const byType = {};
+    let unknownCostRequests = 0;
     for (const e of logs) {
       byType[e.type] = byType[e.type] || { requests: 0, cost: 0 };
       byType[e.type].requests += 1;
-      byType[e.type].cost += e.estimatedCost || 0;
+      if (e.estimatedCost != null) byType[e.type].cost += e.estimatedCost;
+      else unknownCostRequests += 1;
     }
     const totalCost = logs.reduce((sum, e) => sum + (e.estimatedCost || 0), 0);
     const totalRequests = logs.length;
@@ -1264,9 +1374,10 @@ app.post('/admin/bulk-test', async (req, res) => {
       runId,
       ts: new Date().toISOString(),
       ttsConfig: resolvedTts,
-      llmModel: OPENROUTER_MODEL,
+      llmModel: appConfig.openRouterModel,
       scriptsRun: results.length,
       totalCost,
+      unknownCostRequests, // if >0, totalCost is a floor, not the real total - some model here isn't in MODEL_PRICING
       totalRequests,
       avgLatencyMs,
       byType,
@@ -1390,6 +1501,7 @@ ensureDataFiles();
 loadSystemPrompt();
 loadOpeningTemplate();
 loadTtsConfig();
+loadAppConfig();
 
 // Voicemail audio is a nice-to-have, not core to the service - a bad
 // AURA_MODEL or a transient Deepgram error shouldn't crash-loop the whole
@@ -1460,7 +1572,7 @@ class CallSession {
       // endpointing/speech_final alone - endpointing can fire on a brief
       // mid-thought pause ("I need... to check my calendar") and cut the
       // caller off. UtteranceEnd waits for a longer, more confident gap.
-      utterance_end_ms: parseInt(UTTERANCE_END_MS, 10),
+      utterance_end_ms: appConfig.utteranceEndMs,
     });
 
     this.dgConnection.on(LiveTranscriptionEvents.Open, () => {
@@ -1819,7 +1931,7 @@ class CallSession {
             ' Respond with only the label, nothing else.',
           messages: [{ role: 'user', content: transcriptText }],
           maxTokens: 20,
-          model: CLASSIFIER_MODEL, // cheap model - this never talks to the caller
+          model: appConfig.classifierModel, // cheap model - this never talks to the caller
         });
         if (label) outcome = label.trim();
 

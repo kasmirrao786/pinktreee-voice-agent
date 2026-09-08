@@ -2,320 +2,569 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>PinkTree Voice Agent — Admin</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PinkTreeE — Voice Agent Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
 <style>
+  :root{
+    --bg: #F6F4EF;
+    --surface: #FFFFFF;
+    --surface-sunk: #EFEDE5;
+    --ink: #14130F;
+    --ink-soft: #4A473E;
+    --ink-mute: #8A8678;
+    --line: #DFDBCE;
+    --line-strong: #C5C0AE;
+    --sidebar: #14130F;
+    --sidebar-text: #ECE9DE;
+    --sidebar-dim: #8B8778;
+    --sidebar-line: #2A2822;
+    --good-bg: #E3EEE2;
+    --good-ink: #2E5C3E;
+    --bad-bg: #F3E4DD;
+    --bad-ink: #8A3A25;
+    --radius: 3px;
+    --serif: "Fraunces", Georgia, serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
   * { box-sizing: border-box; }
-  body { font-family: -apple-system, sans-serif; max-width: 860px; margin: 30px auto; padding: 0 16px; color: #222; }
-  h1 { font-size: 18px; margin-bottom: 4px; }
-  .sub { color: #888; font-size: 13px; margin-bottom: 20px; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--ink); color: var(--bg); }
 
-  .tabs { display: flex; gap: 4px; border-bottom: 1px solid #ddd; margin-bottom: 16px; }
-  .tab { padding: 8px 14px; cursor: pointer; font-size: 14px; color: #666; border-bottom: 2px solid transparent; }
-  .tab.active { color: #063; border-bottom-color: #063; font-weight: 600; }
+  a { color: inherit; }
+  button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+
+  /* ---------- Shell ---------- */
+  .shell { display: flex; min-height: 100vh; }
+
+  .sidebar {
+    width: 216px;
+    flex-shrink: 0;
+    background: var(--sidebar);
+    color: var(--sidebar-text);
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+  .brand {
+    padding: 22px 18px 16px;
+    border-bottom: 1px solid var(--sidebar-line);
+  }
+  .brand .wordmark {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 19px;
+    letter-spacing: 0.01em;
+    color: #fff;
+  }
+  .brand .tagline {
+    margin-top: 4px;
+    font-size: 10.5px;
+    color: var(--sidebar-dim);
+    line-height: 1.4;
+  }
+
+  nav.navlist { flex: 1; padding: 10px 0; overflow-y: auto; }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 18px;
+    font-size: 12.5px;
+    color: var(--sidebar-dim);
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+    white-space: nowrap;
+  }
+  .tab .dot { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0; flex-shrink: 0; }
+  .tab:hover { color: var(--sidebar-text); background: rgba(255,255,255,0.03); }
+  .tab.active { color: #fff; border-left-color: #fff; background: rgba(255,255,255,0.05); }
+  .tab.active .dot { opacity: 1; }
+
+  .sidebar-foot {
+    padding: 14px 18px 18px;
+    border-top: 1px solid var(--sidebar-line);
+    font-size: 10.5px;
+    color: var(--sidebar-dim);
+    line-height: 1.6;
+  }
+  .sidebar-foot .row { display: flex; justify-content: space-between; gap: 8px; }
+  .sidebar-foot .live { color: #9FD9AE; }
+  .sidebar-foot .pulse {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: #9FD9AE; margin-right: 5px; position: relative; top: -1px;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
+
+  main.content {
+    flex: 1;
+    min-width: 0;
+    padding: 30px 40px 60px;
+    max-width: 980px;
+  }
+
+  .content-head { margin-bottom: 22px; }
+  .content-head h1 {
+    font-family: var(--serif);
+    font-weight: 500;
+    font-size: 22px;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .content-head .sub { color: var(--ink-mute); font-size: 12px; }
+
   .panel { display: none; }
-  .panel.active { display: block; }
+  .panel.active { display: block; animation: fade .18s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
 
-  /* Voice tab */
-  #voiceChat, #textChat { border: 1px solid #ddd; border-radius: 8px; padding: 12px; height: 360px; overflow-y: auto; margin-bottom: 12px; background: #fafafa; }
-  .msg { margin: 8px 0; line-height: 1.4; font-size: 14px; }
-  .agent b { color: #063; }
-  .caller b { color: #06c; }
-  .status { color: #999; font-style: italic; }
+  h3.sectionTitle {
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 500;
+    font-size: 14.5px;
+    color: var(--ink);
+    margin: 26px 0 10px;
+  }
+  h3.sectionTitle:first-child { margin-top: 0; }
 
-  #recordBtn { width: 100%; padding: 16px; font-size: 15px; font-weight: 600; border-radius: 8px; border: none; cursor: pointer; background: #063; color: white; }
-  #recordBtn.recording { background: #c33; }
-  #recordBtn:disabled { background: #ccc; cursor: not-allowed; }
-  .hint { text-align: center; color: #999; font-size: 12px; margin-top: 8px; }
+  /* ---------- Chat panels (voice/text test) ---------- */
+  #voiceChat, #textChat {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px;
+    height: 380px;
+    overflow-y: auto;
+    margin-bottom: 14px;
+    background: var(--surface);
+  }
+  .msg { margin: 0 0 14px; line-height: 1.55; font-size: 13px; max-width: 88%; }
+  .msg:last-child { margin-bottom: 0; }
+  .msg.agent { font-family: var(--serif); font-size: 14.5px; color: var(--ink); }
+  .msg.agent b { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; color: var(--ink-mute); font-weight: 500; margin-bottom: 3px; }
+  .msg.caller { margin-left: auto; text-align: right; color: var(--ink-soft); }
+  .msg.caller b { display: block; font-size: 10px; letter-spacing: 0.04em; color: var(--ink-mute); font-weight: 500; margin-bottom: 3px; }
+  .msg.status { text-align: center; max-width: 100%; }
+  .status { color: var(--ink-mute); font-style: normal; font-size: 11.5px; }
 
-  /* Text tab */
+  #recordBtn {
+    width: 100%; padding: 16px; font-size: 13px; font-weight: 500;
+    letter-spacing: 0.02em;
+    border-radius: var(--radius); border: 1px solid var(--ink); cursor: pointer;
+    background: var(--ink); color: #fff;
+    transition: background .12s ease, transform .05s ease;
+  }
+  #recordBtn:active { transform: scale(0.997); }
+  #recordBtn.recording { background: var(--bad-ink); border-color: var(--bad-ink); animation: recpulse 1.1s ease-in-out infinite; }
+  @keyframes recpulse { 0%,100% { box-shadow: 0 0 0 0 rgba(138,58,37,0.35); } 50% { box-shadow: 0 0 0 7px rgba(138,58,37,0); } }
+  #recordBtn:disabled { background: var(--line-strong); border-color: var(--line-strong); cursor: not-allowed; }
+  .hint { text-align: center; color: var(--ink-mute); font-size: 11px; margin-top: 9px; }
+
+  /* ---------- Text tab ---------- */
   #textForm { display: flex; gap: 8px; }
-  #textInput { flex: 1; padding: 10px; font-size: 14px; }
-  #textForm button { padding: 10px 16px; font-size: 14px; cursor: pointer; }
+  #textInput {
+    flex: 1; padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface);
+  }
+  #textInput:focus { outline: none; border-color: var(--ink); }
+  #textForm button {
+    padding: 11px 18px; cursor: pointer; border: 1px solid var(--ink);
+    background: var(--ink); color: #fff; border-radius: var(--radius); font-weight: 500;
+  }
 
-  /* Logs / DNC tabs */
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: top; }
-  th { color: #888; font-weight: 600; }
-  .outcome { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #eee; }
-  .outcome.booked_demo { background: #d4f7d4; }
-  .outcome.do_not_call, .outcome.not_interested { background: #fddede; }
-  #dncForm { display: flex; gap: 8px; margin-bottom: 16px; }
-  #dncForm input { padding: 8px; font-size: 13px; }
+  /* ---------- Tables ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--ink-mute); font-weight: 500; font-size: 10.5px; letter-spacing: 0.03em; }
+  tbody tr:hover { background: var(--surface-sunk); }
+
+  .outcome { display: inline-block; padding: 2px 7px; border-radius: 20px; font-size: 10.5px; background: var(--surface-sunk); color: var(--ink-soft); }
+  .outcome.booked_demo { background: var(--good-bg); color: var(--good-ink); }
+  .outcome.do_not_call, .outcome.not_interested { background: var(--bad-bg); color: var(--bad-ink); }
+
+  #dncForm { display: flex; gap: 8px; margin-bottom: 18px; }
+  #dncForm input {
+    padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+  }
+  #dncForm input:focus { outline: none; border-color: var(--ink); }
   #dncForm input[name=to] { flex: 1; }
   #dncForm input[name=reason] { flex: 2; }
-  .refresh { font-size: 12px; color: #888; cursor: pointer; text-decoration: underline; float: right; }
-  .empty { color: #aaa; font-size: 13px; padding: 12px 0; }
+  #dncForm button {
+    padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: #fff;
+    border-radius: var(--radius); cursor: pointer; font-weight: 500;
+  }
 
-  /* Script tab */
-  #scriptEditor { width: 100%; height: 380px; font-family: ui-monospace, monospace; font-size: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; resize: vertical; }
+  .refresh, .clear-link {
+    font-size: 11px; color: var(--ink-mute); cursor: pointer; text-decoration: none;
+    border-bottom: 1px dotted var(--ink-mute);
+  }
+  .refresh { float: right; }
+  .clear-link { color: var(--bad-ink); border-bottom-color: var(--bad-ink); margin-left: 12px; }
+  .refresh:hover, .clear-link:hover { color: var(--ink); border-bottom-color: var(--ink); }
+
+  .empty { color: var(--ink-mute); font-size: 12px; padding: 22px 0; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius); margin-top: 8px; }
+
+  /* ---------- Script tab ---------- */
+  #openingEditor, #scriptEditor {
+    width: 100%; font-family: var(--mono); font-size: 12px; padding: 12px;
+    border: 1px solid var(--line); border-radius: var(--radius); resize: vertical;
+    background: var(--surface); line-height: 1.6;
+  }
+  #openingEditor { height: 90px; }
+  #scriptEditor { height: 380px; }
+  #openingEditor:focus, #scriptEditor:focus { outline: none; border-color: var(--ink); }
+
   .scriptActions { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
-  .scriptActions button { padding: 8px 14px; font-size: 13px; cursor: pointer; }
-  #scriptSaveBtn { background: #063; color: white; border: none; border-radius: 6px; }
-  #scriptResetBtn { background: none; border: 1px solid #ccc; border-radius: 6px; }
-  #scriptStatus { font-size: 12px; color: #888; }
+  .scriptActions button {
+    padding: 8px 15px; font-size: 12px; cursor: pointer; border-radius: var(--radius); font-weight: 500;
+  }
+  #scriptSaveBtn, #openingSaveBtn, #ttsSaveBtn, #cfgSaveBtn {
+    background: var(--ink); color: #fff; border: 1px solid var(--ink);
+  }
+  #scriptResetBtn, #openingResetBtn, #ttsResetBtn, #cfgResetBtn {
+    background: none; border: 1px solid var(--line-strong); color: var(--ink-soft);
+  }
+  #scriptStatus, #openingStatus, #ttsStatus, #cfgStatus { font-size: 11px; color: var(--ink-mute); }
 
-  /* Contacts tab */
-  #importRow { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
-  #importRow button { padding: 8px 14px; font-size: 13px; cursor: pointer; }
-  .call-btn { padding: 4px 10px; font-size: 12px; cursor: pointer; background: #063; color: white; border: none; border-radius: 4px; }
-  .call-btn:disabled { background: #ccc; cursor: not-allowed; }
-  .clear-link { font-size: 12px; color: #c33; cursor: pointer; text-decoration: underline; }
+  .fieldnote {
+    font-size: 11px; color: var(--ink-mute); margin: 8px 0 4px; line-height: 1.6;
+  }
+  .fieldnote code {
+    background: var(--surface-sunk); padding: 1px 5px; border-radius: 2px; font-size: 10.5px;
+  }
 
-  /* Analytics tab */
-  .statGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
-  .statCard { border: 1px solid #eee; border-radius: 8px; padding: 12px; text-align: center; }
-  .statCard .num { font-size: 22px; font-weight: 700; color: #063; }
-  .statCard .label { font-size: 11px; color: #888; margin-top: 4px; }
-  .barRow { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12px; }
-  .barRow .barLabel { width: 130px; flex-shrink: 0; color: #555; }
-  .barRow .barTrack { flex: 1; background: #f0f0f0; border-radius: 4px; overflow: hidden; height: 16px; }
-  .barRow .barFill { height: 100%; background: #063; }
-  .barRow .barCount { width: 30px; text-align: right; color: #888; }
-  h3.sectionTitle { font-size: 13px; color: #555; margin: 20px 0 8px; }
+  /* ---------- Contacts tab ---------- */
+  #importRow { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+  #importFile {
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 7px; background: var(--surface); font-size: 12px;
+  }
+  #importRow button {
+    padding: 8px 15px; font-size: 12px; cursor: pointer; border-radius: var(--radius);
+    background: var(--ink); color: #fff; border: 1px solid var(--ink); font-weight: 500;
+  }
+  .call-btn {
+    padding: 4px 11px; font-size: 11px; cursor: pointer; background: transparent; color: var(--ink);
+    border: 1px solid var(--ink); border-radius: 20px; font-weight: 500;
+  }
+  .call-btn:hover { background: var(--ink); color: #fff; }
+  .call-btn:disabled { background: var(--line); color: var(--ink-mute); border-color: var(--line); cursor: not-allowed; }
+
+  /* ---------- Analytics ---------- */
+  .statGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 8px; }
+  .statCard { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 12px; background: var(--surface); }
+  .statCard .num { font-family: var(--serif); font-size: 24px; font-weight: 500; color: var(--ink); line-height: 1; }
+  .statCard .label { font-size: 10.5px; color: var(--ink-mute); margin-top: 7px; letter-spacing: 0.01em; }
+
+  .barRow { display: flex; align-items: center; gap: 10px; margin: 7px 0; font-size: 11.5px; }
+  .barRow .barLabel { width: 130px; flex-shrink: 0; color: var(--ink-soft); }
+  .barRow .barTrack { flex: 1; background: var(--surface-sunk); border-radius: 2px; overflow: hidden; height: 14px; }
+  .barRow .barFill { height: 100%; background: var(--ink); }
+  .barRow .barCount { width: 30px; text-align: right; color: var(--ink-mute); }
+
+  /* ---------- Settings ---------- */
+  select, input[type=text], input[type=number] {
+    padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface);
+  }
+  select:focus, input:focus { outline: none; border-color: var(--ink); }
+  label { font-size: 11px; color: var(--ink-soft); }
+  label input { display: block; width: 100%; margin-top: 5px; }
+
+  /* ---------- Bulk test ---------- */
+  #bulkRunBtn {
+    padding: 9px 17px; border-radius: var(--radius); background: var(--ink); color: #fff; border: 1px solid var(--ink);
+    cursor: pointer; font-weight: 500; font-size: 12px;
+  }
+  #bulkRepeats { width: 54px; padding: 7px; border: 1px solid var(--line); border-radius: var(--radius); }
+
+  audio { filter: none; }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 760px) {
+    .shell { flex-direction: column; }
+    .sidebar { width: 100%; height: auto; position: relative; flex-direction: row; align-items: center; }
+    .brand { border-bottom: none; border-right: 1px solid var(--sidebar-line); padding: 14px 16px; }
+    nav.navlist { display: flex; overflow-x: auto; padding: 0; }
+    .tab { border-left: none; border-bottom: 2px solid transparent; padding: 14px 12px; }
+    .tab.active { border-left: none; border-bottom-color: #fff; }
+    .sidebar-foot { display: none; }
+    main.content { padding: 22px 18px 40px; }
+  }
 </style>
 </head>
 <body>
-  <h1>PinkTree Voice Agent — Admin</h1>
-  <div class="sub">Test the sales script and review call activity — nothing here dials a real number.</div>
-
-  <div class="tabs">
-    <div class="tab active" data-tab="voice">Voice Test</div>
-    <div class="tab" data-tab="text">Text Test</div>
-    <div class="tab" data-tab="script">Script</div>
-    <div class="tab" data-tab="contacts">Contacts</div>
-    <div class="tab" data-tab="logs">Call Logs</div>
-    <div class="tab" data-tab="dnc">Do-Not-Call</div>
-    <div class="tab" data-tab="analytics">Analytics</div>
-    <div class="tab" data-tab="settings">Settings</div>
-    <div class="tab" data-tab="costs">Costs</div>
-    <div class="tab" data-tab="bulktest">Bulk Test</div>
-  </div>
-
-  <!-- Voice Test -->
-  <div class="panel active" id="panel-voice">
-    <div id="voiceChat"></div>
-    <button id="recordBtn">Hold to talk</button>
-    <div class="hint">Press and hold, speak your reply, release when done.</div>
-  </div>
-
-  <!-- Text Test -->
-  <div class="panel" id="panel-text">
-    <div id="textChat"></div>
-    <form id="textForm">
-      <input id="textInput" autocomplete="off" placeholder="Type your reply as the callee..." />
-      <button type="submit">Send</button>
-    </form>
-  </div>
-
-  <!-- Script -->
-  <div class="panel" id="panel-script">
-    <h3 class="sectionTitle" style="margin-top:0;">Opening line
-      <span style="font-weight:400; color:#aaa;">— skips the LLM entirely, spoken instantly</span>
-    </h3>
-    <textarea id="openingEditor" spellcheck="false" style="height:90px; width:100%; font-family:ui-monospace,monospace; font-size:12px; padding:10px; border:1px solid #ddd; border-radius:8px; resize:vertical;"></textarea>
-    <div class="scriptActions">
-      <button id="openingSaveBtn">Save</button>
-      <button id="openingResetBtn" type="button">Reset to default</button>
-      <span id="openingStatus"></span>
-    </div>
-    <div style="font-size:11px; color:#999; margin:6px 0 4px;">
-      <code>{company}</code> = pulled from the matching contact, if any.
-      <code>[[...{company}...]]</code> = a whole clause, dropped entirely if no company is known for this call.
-    </div>
-
-    <h3 class="sectionTitle">Full call script</h3>
-    <textarea id="scriptEditor" spellcheck="false"></textarea>
-    <div class="scriptActions">
-      <button id="scriptSaveBtn">Save</button>
-      <button id="scriptResetBtn" type="button">Reset to default</button>
-      <span id="scriptStatus"></span>
-    </div>
-  </div>
-
-  <!-- Contacts -->
-  <div class="panel" id="panel-contacts">
-    <div id="importRow">
-      <input type="file" id="importFile" accept=".csv,.xlsx,.xls" />
-      <button id="importBtn">Import</button>
-      <span id="importStatus" style="font-size:12px; color:#888;"></span>
-    </div>
-    <span class="refresh" onclick="loadContacts()">refresh</span>
-    <span class="clear-link" onclick="clearContacts()">clear all</span>
-    <table id="contactsTable">
-      <thead><tr><th>Phone</th><th>Name</th><th>Company</th><th>Called</th><th>Last outcome</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="empty" id="contactsEmpty" style="display:none;">No contacts imported yet. CSV/XLSX needs a phone/number column.</div>
-  </div>
-
-  <!-- Call Logs -->
-  <div class="panel" id="panel-logs">
-    <span class="refresh" onclick="loadLogs()">refresh</span>
-    <table id="logsTable">
-      <thead><tr><th>Time</th><th>Event</th><th>To</th><th>Outcome</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="empty" id="logsEmpty" style="display:none;">No call events yet.</div>
-  </div>
-
-  <!-- DNC -->
-  <div class="panel" id="panel-dnc">
-    <form id="dncForm">
-      <input name="to" placeholder="+15551234567" required />
-      <input name="reason" placeholder="reason (optional)" />
-      <button type="submit">Add</button>
-    </form>
-    <span class="refresh" onclick="loadDnc()">refresh</span>
-    <table id="dncTable">
-      <thead><tr><th>Number</th><th>Reason</th><th>Added</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="empty" id="dncEmpty" style="display:none;">No numbers on the list yet.</div>
-  </div>
-
-  <!-- Analytics -->
-  <div class="panel" id="panel-analytics">
-    <span class="refresh" onclick="loadAnalytics()">refresh</span>
-    <div class="statGrid" id="statGrid"></div>
-    <h3 class="sectionTitle">Outcomes</h3>
-    <div id="outcomeBars"></div>
-    <h3 class="sectionTitle">Calls per day (last 14 days)</h3>
-    <div id="dayBars"></div>
-  </div>
-
-  <!-- Settings -->
-  <div class="panel" id="panel-settings">
-    <h3 class="sectionTitle" style="margin-top:0;">Live-call TTS provider</h3>
-    <div style="font-size:12px; color:#888; margin-bottom:10px;">
-      Only affects the per-sentence speech during live conversation - the
-      cached clips (opening line, backchannel, fallback, opt-out) always use
-      Deepgram Aura regardless of this setting, since their cost is a
-      one-time thing either way.
-    </div>
-    <div style="display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap;">
-      <select id="ttsProvider" style="padding:8px; font-size:13px;">
-        <option value="deepgram">Deepgram (Aura)</option>
-        <option value="openrouter">OpenRouter</option>
-        <option value="self_hosted">Self-hosted (Kokoro-FastAPI or similar)</option>
-      </select>
-      <input id="ttsModel" placeholder="model id" style="padding:8px; font-size:13px; flex:1; min-width:180px;" />
-      <input id="ttsVoice" placeholder="voice (optional)" style="padding:8px; font-size:13px; width:140px;" />
-    </div>
-    <div id="ttsBaseUrlRow" style="display:none; margin-bottom:8px;">
-      <input id="ttsBaseUrl" placeholder="http://your-kokoro-service:8880 (internal Coolify URL is fastest)" style="padding:8px; font-size:13px; width:100%;" />
-    </div>
-    <div class="scriptActions">
-      <button id="ttsSaveBtn">Save</button>
-      <button id="ttsResetBtn" type="button">Reset to default</button>
-      <span id="ttsStatus"></span>
-    </div>
-    <div style="font-size:11px; color:#999; margin-top:10px;">
-      Examples — Deepgram: model <code>aura-asteria-en</code>, no voice needed.
-      OpenRouter: model <code>hexgrad/kokoro-82m</code>, voice e.g. <code>af_bella</code>.
-      Self-hosted: model <code>kokoro</code>, base URL pointing at your deployed
-      Kokoro-FastAPI service (use the internal/private network address if your
-      TTS service and this app are on the same host - it's meaningfully
-      faster than routing out over the public internet and back).
-      <br/>Note: OpenRouter TTS hasn't been confirmed to support true
-      low-latency streaming the way Aura does - the first sentence of a
-      reply may take a bit longer to start playing when OpenRouter is
-      selected. Test it in the Voice Test tab before trusting it on real calls.
-    </div>
-
-    <h3 class="sectionTitle">General settings</h3>
-    <div style="font-size:12px; color:#888; margin-bottom:10px;">
-      Operational config only — no credentials. Account SIDs, auth tokens,
-      and API keys stay in your host's environment variables (Coolify/Railway),
-      never here, since this panel has no login yet.
-      <br/>If you're on Twilio BYOC with Telnyx underneath, there's nothing
-      to configure here for that specifically — BYOC is set up in the
-      Twilio console and is invisible to this app; it still just talks to
-      Twilio's API either way.
-    </div>
-    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
-      <label style="font-size:12px; color:#555;">Outbound caller ID
-        <input id="cfgCallerId" placeholder="+15551234567" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
-      </label>
-      <label style="font-size:12px; color:#555;">Max concurrent calls
-        <input id="cfgMaxConcurrent" type="number" min="1" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
-      </label>
-      <label style="font-size:12px; color:#555;">Calling hours timezone
-        <input id="cfgCallHoursTz" placeholder="America/New_York" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
-      </label>
-      <label style="font-size:12px; color:#555;">Calling hours (24h, start–end)
-        <div style="display:flex; gap:6px; margin-top:4px;">
-          <input id="cfgCallHoursStart" type="number" min="0" max="23" style="width:100%; padding:8px; font-size:13px;" />
-          <input id="cfgCallHoursEnd" type="number" min="0" max="23" style="width:100%; padding:8px; font-size:13px;" />
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="wordmark">PinkTreeE</div>
+        <div class="tagline">Voice agent console — test calls, review activity, nothing here dials a real number from this screen alone.</div>
+      </div>
+      <nav class="navlist">
+        <div class="tab active" data-tab="voice" data-title="Voice test" data-sub="Talk to the agent live through your microphone.">
+          <span class="dot"></span>Voice test
         </div>
-      </label>
-      <label style="font-size:12px; color:#555;">Conversation LLM model
-        <input id="cfgLlmModel" placeholder="anthropic/claude-sonnet-4.5" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
-      </label>
-      <label style="font-size:12px; color:#555;">Classifier model (cheap, post-call only)
-        <input id="cfgClassifierModel" placeholder="anthropic/claude-haiku-4.5" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
-      </label>
-      <label style="font-size:12px; color:#555;">Turn-detection wait (ms)
-        <input id="cfgUtteranceEndMs" type="number" min="200" style="display:block; width:100%; padding:8px; font-size:13px; margin-top:4px;" />
-      </label>
-    </div>
-    <div class="scriptActions">
-      <button id="cfgSaveBtn">Save</button>
-      <button id="cfgResetBtn" type="button">Reset to default</button>
-      <span id="cfgStatus"></span>
-    </div>
-  </div>
+        <div class="tab" data-tab="text" data-title="Text test" data-sub="Type turns back and forth with the agent instead of speaking.">
+          <span class="dot"></span>Text test
+        </div>
+        <div class="tab" data-tab="script" data-title="Script" data-sub="Edit the opening line and the full call script the agent follows.">
+          <span class="dot"></span>Script
+        </div>
+        <div class="tab" data-tab="contacts" data-title="Contacts" data-sub="Import a list and place calls to individual contacts.">
+          <span class="dot"></span>Contacts
+        </div>
+        <div class="tab" data-tab="logs" data-title="Call logs" data-sub="Every call event, in order.">
+          <span class="dot"></span>Call logs
+        </div>
+        <div class="tab" data-tab="dnc" data-title="Do-not-call" data-sub="Numbers the agent will never dial.">
+          <span class="dot"></span>Do-not-call
+        </div>
+        <div class="tab" data-tab="analytics" data-title="Analytics" data-sub="Outcomes and call volume over time.">
+          <span class="dot"></span>Analytics
+        </div>
+        <div class="tab" data-tab="settings" data-title="Settings" data-sub="TTS provider and general call configuration.">
+          <span class="dot"></span>Settings
+        </div>
+        <div class="tab" data-tab="costs" data-title="Costs" data-sub="Estimated spend by provider and model.">
+          <span class="dot"></span>Costs
+        </div>
+        <div class="tab" data-tab="bulktest" data-title="Bulk test" data-sub="Run canned caller scripts through the real pipeline, no phone call.">
+          <span class="dot"></span>Bulk test
+        </div>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="row"><span><span class="pulse"></span>console</span><span class="live">active</span></div>
+        <div class="row"><span>calls placed here</span><span>never</span></div>
+      </div>
+    </aside>
 
-  <!-- Costs -->
-  <div class="panel" id="panel-costs">
-    <span class="refresh" onclick="loadCosts()">refresh</span>
-    <div class="statGrid" id="costStatGrid"></div>
-    <h3 class="sectionTitle">By provider / model</h3>
-    <table id="costTable">
-      <thead><tr><th>Type</th><th>Provider</th><th>Model</th><th>Requests</th><th>Avg latency</th><th>Total cost</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <h3 class="sectionTitle">Recent requests</h3>
-    <table id="requestLogTable">
-      <thead><tr><th>Time</th><th>Type</th><th>Model</th><th>Latency</th><th>Cost</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="empty" id="costsEmpty" style="display:none;">No requests logged yet.</div>
-  </div>
+    <main class="content">
+      <div class="content-head">
+        <h1 id="pageTitle">Voice test</h1>
+        <div class="sub" id="pageSub">Talk to the agent live through your microphone.</div>
+      </div>
 
-  <!-- Bulk Test -->
-  <div class="panel" id="panel-bulktest">
-    <div style="font-size:12px; color:#888; margin-bottom:10px;">
-      Runs a handful of canned caller scripts (not interested, full qualify-to-book,
-      gatekeeper, pricing objection, opt-out) through the real LLM+TTS pipeline -
-      no phone call, no Twilio. Costs real API money for each run, but nothing
-      close to a real call. Results are kept separate from your real-call
-      Analytics/Costs data.
-    </div>
-    <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px;">
-      <label style="font-size:13px;">Repeats: <input id="bulkRepeats" type="number" value="1" min="1" max="5" style="width:50px; padding:6px;" /></label>
-      <button id="bulkRunBtn">Run bulk test</button>
-      <span id="bulkStatus" style="font-size:12px; color:#888;"></span>
-    </div>
+      <!-- Voice Test -->
+      <div class="panel active" id="panel-voice">
+        <div id="voiceChat"></div>
+        <button id="recordBtn">Hold to talk</button>
+        <div class="hint">Press and hold, speak your reply, release when done.</div>
+      </div>
 
-    <div id="bulkLatestResult"></div>
+      <!-- Text Test -->
+      <div class="panel" id="panel-text">
+        <div id="textChat"></div>
+        <form id="textForm">
+          <input id="textInput" autocomplete="off" placeholder="Type your reply as the callee..." />
+          <button type="submit">Send</button>
+        </form>
+      </div>
 
-    <h3 class="sectionTitle">Past runs</h3>
-    <span class="refresh" onclick="loadBulkTestRuns()">refresh</span>
-    <table id="bulkRunsTable">
-      <thead><tr><th>Time</th><th>TTS</th><th>LLM model</th><th>Scripts</th><th>Total cost</th><th>Avg latency</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="empty" id="bulkRunsEmpty" style="display:none;">No bulk test runs yet.</div>
+      <!-- Script -->
+      <div class="panel" id="panel-script">
+        <h3 class="sectionTitle">Opening line — skips the LLM entirely, spoken instantly</h3>
+        <textarea id="openingEditor" spellcheck="false"></textarea>
+        <div class="scriptActions">
+          <button id="openingSaveBtn">Save</button>
+          <button id="openingResetBtn" type="button">Reset to default</button>
+          <span id="openingStatus"></span>
+        </div>
+        <div class="fieldnote">
+          <code>{company}</code> is pulled from the matching contact, if any. <code>[[...{company}...]]</code> is a whole clause, dropped entirely if no company is known for this call.
+        </div>
+
+        <h3 class="sectionTitle">Full call script</h3>
+        <textarea id="scriptEditor" spellcheck="false"></textarea>
+        <div class="scriptActions">
+          <button id="scriptSaveBtn">Save</button>
+          <button id="scriptResetBtn" type="button">Reset to default</button>
+          <span id="scriptStatus"></span>
+        </div>
+      </div>
+
+      <!-- Contacts -->
+      <div class="panel" id="panel-contacts">
+        <div id="importRow">
+          <input type="file" id="importFile" accept=".csv,.xlsx,.xls" />
+          <button id="importBtn">Import</button>
+          <span id="importStatus" style="font-size:11px; color:var(--ink-mute);"></span>
+        </div>
+        <span class="refresh" onclick="loadContacts()">refresh</span>
+        <span class="clear-link" onclick="clearContacts()">clear all</span>
+        <table id="contactsTable">
+          <thead><tr><th>Phone</th><th>Name</th><th>Company</th><th>Called</th><th>Last outcome</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="contactsEmpty" style="display:none;">No contacts imported yet. CSV/XLSX needs a phone/number column.</div>
+      </div>
+
+      <!-- Call Logs -->
+      <div class="panel" id="panel-logs">
+        <span class="refresh" onclick="loadLogs()">refresh</span>
+        <table id="logsTable">
+          <thead><tr><th>Time</th><th>Event</th><th>To</th><th>Outcome</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="logsEmpty" style="display:none;">No call events yet.</div>
+      </div>
+
+      <!-- DNC -->
+      <div class="panel" id="panel-dnc">
+        <form id="dncForm">
+          <input name="to" placeholder="+15551234567" required />
+          <input name="reason" placeholder="reason (optional)" />
+          <button type="submit">Add</button>
+        </form>
+        <span class="refresh" onclick="loadDnc()">refresh</span>
+        <table id="dncTable">
+          <thead><tr><th>Number</th><th>Reason</th><th>Added</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="dncEmpty" style="display:none;">No numbers on the list yet.</div>
+      </div>
+
+      <!-- Analytics -->
+      <div class="panel" id="panel-analytics">
+        <span class="refresh" onclick="loadAnalytics()">refresh</span>
+        <div class="statGrid" id="statGrid"></div>
+        <h3 class="sectionTitle">Outcomes</h3>
+        <div id="outcomeBars"></div>
+        <h3 class="sectionTitle">Calls per day (last 14 days)</h3>
+        <div id="dayBars"></div>
+      </div>
+
+      <!-- Settings -->
+      <div class="panel" id="panel-settings">
+        <h3 class="sectionTitle">Live-call TTS provider</h3>
+        <div class="fieldnote" style="margin-top:0;">
+          Only affects the per-sentence speech during a live conversation — the cached clips (opening line, backchannel, fallback, opt-out) always use Deepgram Aura regardless of this setting, since their cost is one-time either way.
+        </div>
+        <div style="display:flex; gap:8px; margin: 10px 0 8px; flex-wrap:wrap;">
+          <select id="ttsProvider">
+            <option value="deepgram">Deepgram (Aura)</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="self_hosted">Self-hosted (Kokoro-FastAPI or similar)</option>
+          </select>
+          <input id="ttsModel" placeholder="model id" style="flex:1; min-width:180px;" />
+          <input id="ttsVoice" placeholder="voice (optional)" style="width:140px;" />
+        </div>
+        <div id="ttsBaseUrlRow" style="display:none; margin-bottom:8px;">
+          <input id="ttsBaseUrl" placeholder="http://your-kokoro-service:8880 (internal Coolify URL is fastest)" style="width:100%;" />
+        </div>
+        <div class="scriptActions">
+          <button id="ttsSaveBtn">Save</button>
+          <button id="ttsResetBtn" type="button">Reset to default</button>
+          <span id="ttsStatus"></span>
+        </div>
+        <div class="fieldnote">
+          Deepgram: model <code>aura-asteria-en</code>, no voice needed. OpenRouter: model <code>hexgrad/kokoro-82m</code>, voice e.g. <code>af_bella</code>. Self-hosted: model <code>kokoro</code>, base URL pointing at your deployed Kokoro-FastAPI service — use the internal/private network address if it's on the same host as this app, it's meaningfully faster than routing out over the public internet and back.
+          <br/>OpenRouter TTS hasn't been confirmed to support true low-latency streaming the way Aura does — the first sentence of a reply may take a bit longer to start playing. Test it in Voice Test before trusting it on real calls.
+        </div>
+
+        <h3 class="sectionTitle">General settings</h3>
+        <div class="fieldnote" style="margin-top:0;">
+          Operational config only — no credentials. Account SIDs, auth tokens, and API keys stay in your host's environment variables (Coolify/Railway), never here, since this panel has no login yet.
+          <br/>If you're on Twilio BYOC with Telnyx underneath, there's nothing to configure here for that specifically — BYOC is set up in the Twilio console and is invisible to this app; it still just talks to Twilio's API either way.
+        </div>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin: 10px 0 10px;">
+          <label>Outbound caller ID
+            <input id="cfgCallerId" placeholder="+15551234567" />
+          </label>
+          <label>Max concurrent calls
+            <input id="cfgMaxConcurrent" type="number" min="1" />
+          </label>
+          <label>Calling hours timezone
+            <input id="cfgCallHoursTz" placeholder="America/New_York" />
+          </label>
+          <label>Calling hours (24h, start–end)
+            <div style="display:flex; gap:6px; margin-top:5px;">
+              <input id="cfgCallHoursStart" type="number" min="0" max="23" style="width:100%;" />
+              <input id="cfgCallHoursEnd" type="number" min="0" max="23" style="width:100%;" />
+            </div>
+          </label>
+          <label>Conversation LLM model
+            <input id="cfgLlmModel" placeholder="anthropic/claude-sonnet-4.5" />
+          </label>
+          <label>Classifier model (cheap, post-call only)
+            <input id="cfgClassifierModel" placeholder="anthropic/claude-haiku-4.5" />
+          </label>
+          <label>Turn-detection wait (ms)
+            <input id="cfgUtteranceEndMs" type="number" min="200" />
+          </label>
+        </div>
+        <div class="scriptActions">
+          <button id="cfgSaveBtn">Save</button>
+          <button id="cfgResetBtn" type="button">Reset to default</button>
+          <span id="cfgStatus"></span>
+        </div>
+      </div>
+
+      <!-- Costs -->
+      <div class="panel" id="panel-costs">
+        <span class="refresh" onclick="loadCosts()">refresh</span>
+        <div class="statGrid" id="costStatGrid"></div>
+        <h3 class="sectionTitle">By provider / model</h3>
+        <table id="costTable">
+          <thead><tr><th>Type</th><th>Provider</th><th>Model</th><th>Requests</th><th>Avg latency</th><th>Total cost</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <h3 class="sectionTitle">Recent requests</h3>
+        <table id="requestLogTable">
+          <thead><tr><th>Time</th><th>Type</th><th>Model</th><th>Latency</th><th>Cost</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="costsEmpty" style="display:none;">No requests logged yet.</div>
+      </div>
+
+      <!-- Bulk Test -->
+      <div class="panel" id="panel-bulktest">
+        <div class="fieldnote" style="margin-top:0;">
+          Runs a handful of canned caller scripts (not interested, full qualify-to-book, gatekeeper, pricing objection, opt-out) through the real LLM+TTS pipeline — no phone call, no Twilio. Costs real API money for each run, but nothing close to a real call. Results are kept separate from your real-call Analytics/Costs data.
+        </div>
+        <div style="display:flex; gap:10px; align-items:center; margin:14px 0;">
+          <label style="display:flex; align-items:center; gap:6px;">Repeats <input id="bulkRepeats" type="number" value="1" min="1" max="5" /></label>
+          <button id="bulkRunBtn">Run bulk test</button>
+          <span id="bulkStatus" style="font-size:11px; color:var(--ink-mute);"></span>
+        </div>
+
+        <div id="bulkLatestResult"></div>
+
+        <h3 class="sectionTitle">Past runs</h3>
+        <span class="refresh" onclick="loadBulkTestRuns()">refresh</span>
+        <table id="bulkRunsTable">
+          <thead><tr><th>Time</th><th>TTS</th><th>LLM model</th><th>Scripts</th><th>Total cost</th><th>Avg latency</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="bulkRunsEmpty" style="display:none;">No bulk test runs yet.</div>
+      </div>
+    </main>
   </div>
 
 <script>
   // ---- Tabs ----
+  const pageTitle = document.getElementById('pageTitle');
+  const pageSub = document.getElementById('pageSub');
+
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
       document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
       tab.classList.add('active');
       document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+      pageTitle.textContent = tab.dataset.title;
+      pageSub.textContent = tab.dataset.sub;
       if (tab.dataset.tab === 'logs') loadLogs();
       if (tab.dataset.tab === 'dnc') loadDnc();
       if (tab.dataset.tab === 'script') loadScript();
@@ -337,7 +586,7 @@
   function addVoiceMsg(role, text) {
     const div = document.createElement('div');
     div.className = 'msg ' + role;
-    div.innerHTML = role === 'status' ? '<span class="status">' + text + '</span>' : '<b>' + (role === 'agent' ? 'Agent' : 'You') + ':</b> ' + text;
+    div.innerHTML = role === 'status' ? '<span class="status">' + text + '</span>' : '<b>' + (role === 'agent' ? 'Agent' : 'You') + '</b>' + text;
     voiceChat.appendChild(div);
     voiceChat.scrollTop = voiceChat.scrollHeight;
   }
@@ -433,7 +682,7 @@
   function addTextMsg(role, text) {
     const div = document.createElement('div');
     div.className = 'msg ' + role;
-    div.innerHTML = '<b>' + (role === 'agent' ? 'Agent' : 'You') + ':</b> ' + text;
+    div.innerHTML = '<b>' + (role === 'agent' ? 'Agent' : 'You') + '</b>' + text;
     textChat.appendChild(div);
     textChat.scrollTop = textChat.scrollHeight;
   }
@@ -899,16 +1148,16 @@
         '<div class="statCard"><div class="num">' + formatCost2(v.cost) + '</div><div class="label">' + type + ' (' + v.requests + ' req)</div></div>'
       ).join('');
       const costNote = s.unknownCostRequests > 0
-        ? ' <span style="color:#c33; font-weight:400; font-size:11px;">(' + s.unknownCostRequests + ' request(s) used a model not in the pricing table - this total is a floor, not the real cost)</span>'
+        ? ' <span style="color:var(--bad-ink); font-weight:400; font-size:11px;">(' + s.unknownCostRequests + ' request(s) used a model not in the pricing table - this total is a floor, not the real cost)</span>'
         : '';
       document.getElementById('bulkLatestResult').innerHTML =
-        '<h3 class="sectionTitle" style="margin-top:0;">Latest run - ' + s.ttsConfig.provider + '/' + s.ttsConfig.model + ', ' + s.llmModel + '</h3>' +
+        '<h3 class="sectionTitle" style="margin-top:0;">Latest run — ' + s.ttsConfig.provider + '/' + s.ttsConfig.model + ', ' + s.llmModel + '</h3>' +
         '<div class="statGrid">' +
         '<div class="statCard"><div class="num">' + formatCost2(s.totalCost) + '</div><div class="label">Total cost' + costNote + '</div></div>' +
         '<div class="statCard"><div class="num">' + s.avgLatencyMs + 'ms</div><div class="label">Avg latency/request</div></div>' +
         '<div class="statCard"><div class="num">' + s.scriptsRun + '</div><div class="label">Scripts run</div></div>' +
         byTypeHtml + '</div>' +
-        '<audio controls src="/bulk-test-samples/' + s.runId + '.wav" style="width:100%; margin-top:10px;"></audio>';
+        '<audio controls src="/bulk-test-samples/' + s.runId + '.wav" style="width:100%; margin-top:12px;"></audio>';
 
       loadBulkTestRuns();
     } catch (err) {

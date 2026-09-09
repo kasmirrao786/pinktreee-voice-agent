@@ -87,8 +87,6 @@
   .content-head { margin-bottom: 22px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
   .content-head h1 { font-family: var(--serif); font-weight: 500; font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
   .content-head .sub { color: var(--ink-mute); font-size: 12px; }
-  #logoutBtn { background: none; border: 1px solid var(--line-strong); color: var(--ink-mute); padding: 7px 13px; border-radius: var(--radius); cursor: pointer; font-size: 11px; flex-shrink: 0; }
-  #logoutBtn:hover { border-color: var(--ink); color: var(--ink); }
 
   .panel { display: none; }
   .panel.active { display: block; animation: fade .18s ease; }
@@ -203,14 +201,6 @@
 
   audio { filter: none; }
 
-  .loginWrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
-  .loginCard { width: 320px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 30px 28px; }
-  .loginCard .wordmark { font-family: var(--serif); font-weight: 600; font-size: 20px; margin-bottom: 4px; }
-  .loginCard .sub { color: var(--ink-mute); font-size: 11.5px; margin-bottom: 20px; }
-  .loginCard input { width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 12px; background: var(--surface); }
-  .loginCard input:focus { outline: none; border-color: var(--ink); }
-  .loginCard button { width: 100%; padding: 11px; border-radius: var(--radius); background: var(--ink); color: #fff; border: 1px solid var(--ink); cursor: pointer; font-weight: 500; }
-  .loginCard .err { color: var(--bad-ink); font-size: 11.5px; margin-top: 10px; min-height: 14px; }
 
   @media (max-width: 760px) {
     .shell { flex-direction: column; }
@@ -226,19 +216,7 @@
 </head>
 <body>
 
-<div class="loginWrap" id="loginScreen" style="display:none;">
-  <div class="loginCard">
-    <div class="wordmark">PinkTreeE</div>
-    <div class="sub">Voice agent console — sign in to continue.</div>
-    <form id="loginForm">
-      <input id="loginPassword" type="password" placeholder="Password" autocomplete="current-password" required />
-      <button type="submit">Sign in</button>
-    </form>
-    <div class="err" id="loginErr"></div>
-  </div>
-</div>
-
-<div class="shell" id="appShell" style="display:none;">
+<div class="shell" id="appShell">
     <aside class="sidebar">
       <div class="brand">
         <div class="wordmark">PinkTreeE</div>
@@ -288,7 +266,6 @@
           <h1 id="pageTitle">Voice test</h1>
           <div class="sub" id="pageSub">Talk to the agent live through your microphone.</div>
         </div>
-        <button id="logoutBtn">Sign out</button>
       </div>
 
       <div class="panel active" id="panel-voice">
@@ -523,55 +500,6 @@
 </div>
 
 <script>
-  const loginScreen = document.getElementById('loginScreen');
-  const appShell = document.getElementById('appShell');
-  const loginForm = document.getElementById('loginForm');
-  const loginErr = document.getElementById('loginErr');
-
-  async function checkSession() {
-    try {
-      const res = await fetch('/admin/session');
-      if (res.ok) {
-        appShell.style.display = 'flex';
-        loginScreen.style.display = 'none';
-        initApp();
-      } else {
-        loginScreen.style.display = 'flex';
-        appShell.style.display = 'none';
-      }
-    } catch {
-      loginScreen.style.display = 'flex';
-      appShell.style.display = 'none';
-    }
-  }
-
-  loginForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    loginErr.textContent = '';
-    const password = document.getElementById('loginPassword').value;
-    try {
-      const res = await fetch('/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      });
-      if (res.ok) {
-        checkSession();
-      } else {
-        loginErr.textContent = 'Incorrect password.';
-      }
-    } catch (err) {
-      loginErr.textContent = 'Error: ' + err.message;
-    }
-  });
-
-  document.getElementById('logoutBtn').addEventListener('click', async () => {
-    await fetch('/admin/logout', { method: 'POST' });
-    location.reload();
-  });
-
-  checkSession();
-
   let appInitialized = false;
   function initApp() {
     if (appInitialized) return;
@@ -1258,6 +1186,8 @@
   }
 
   }
+
+  initApp();
 </script>
 </body>
 </html>

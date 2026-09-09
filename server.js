@@ -239,6 +239,9 @@ const {
   TWILIO_ACCOUNT_SID,
   TWILIO_AUTH_TOKEN,
   TWILIO_PHONE_NUMBER,
+  TELNYX_API_KEY,
+  TELNYX_CONNECTION_ID,
+  TELNYX_PHONE_NUMBER,
   DEEPGRAM_API_KEY,
   OPENROUTER_API_KEY,
   OPENROUTER_MODEL = 'anthropic/claude-sonnet-4.5',
@@ -274,19 +277,17 @@ const {
   UTTERANCE_END_MS = '1000',
 } = process.env;
 
-const twilioClient = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 const deepgram = createDeepgramClient(DEEPGRAM_API_KEY);
 
 // ---- Operational settings - admin-editable, hot-reloadable ----------------
-// Deliberately NOT here: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN,
-// DEEPGRAM_API_KEY, OPENROUTER_API_KEY - credentials stay in env vars only.
-// The admin panel has no login yet, so anything editable there is
-// effectively public; a phone number or a model name being visible is
-// fine, an API key being visible is not. These env vars below are only the
-// *initial* seed value - after first boot, admin-panel edits (persisted to
-// DATA_DIR/app_config.json) take over and apply without a redeploy.
+// Deliberately NOT here: DEEPGRAM_API_KEY, OPENROUTER_API_KEY - those stay
+// in env vars only. Telephony credentials (Twilio/Telnyx) are the one
+// exception - they live in telephonyConfig below instead, specifically so
+// the provider and its credentials can be switched from the admin panel
+// without a redeploy. See the fieldnote in the admin panel's Telephony
+// section for the tradeoff that comes with that (no login on this panel
+// yet, so anything editable here is effectively public).
 const DEFAULT_APP_CONFIG = {
-  twilioPhoneNumber: TWILIO_PHONE_NUMBER || null, // the outbound caller ID - not a credential, just a number
   callHoursTz: CALL_HOURS_TZ,
   callHoursStart: parseInt(CALL_HOURS_START, 10),
   callHoursEnd: parseInt(CALL_HOURS_END, 10),
@@ -310,6 +311,76 @@ function loadAppConfig() {
   fsSync.writeFileSync(APP_CONFIG_PATH, JSON.stringify(DEFAULT_APP_CONFIG, null, 2));
   appConfig = { ...DEFAULT_APP_CONFIG };
 }
+
+// ---- Telephony provider - which service places outbound calls -------------
+// Switchable from the admin panel's Telephony section (Settings tab) with no
+// redeploy: pick Twilio or Telnyx, drop in that provider's credentials, and
+// /call starts routing through it immediately. Both providers' credentials
+// are kept here (rather than only the *active* one) so switching back and
+// forth doesn't lose whichever set isn't currently selected.
+const TELEPHONY_CONFIG_PATH = path.join(DATA_DIR, 'telephony_config.json');
+const DEFAULT_TELEPHONY_CONFIG = {
+  provider: 'twilio', // 'twilio' | 'telnyx'
+  twilioAccountSid: TWILIO_ACCOUNT_SID || '',
+  twilioAuthToken: TWILIO_AUTH_TOKEN || '',
+  twilioPhoneNumber: TWILIO_PHONE_NUMBER || '',
+  telnyxApiKey: TELNYX_API_KEY || '',
+  telnyxConnectionId: TELNYX_CONNECTION_ID || '',
+  telnyxPhoneNumber: TELNYX_PHONE_NUMBER || '',
+};
+let telephonyConfig = { ...DEFAULT_TELEPHONY_CONFIG };
+
+function loadTelephonyConfig() {
+  const existing = fsSync.existsSync(TELEPHONY_CONFIG_PATH) ? fsSync.readFileSync(TELEPHONY_CONFIG_PATH, 'utf-8') : '';
+  if (existing.trim()) {
+    try {
+      telephonyConfig = { ...DEFAULT_TELEPHONY_CONFIG, ...JSON.parse(existing) };
+      return;
+    } catch {
+      // fall through to reseed below
+    }
+  }
+  fsSync.writeFileSync(TELEPHONY_CONFIG_PATH, JSON.stringify(DEFAULT_TELEPHONY_CONFIG, null, 2));
+  telephonyConfig = { ...DEFAULT_TELEPHONY_CONFIG };
+}
+
+// Built fresh from whatever's currently saved rather than cached at startup,
+// so a credential rotated in the admin panel takes effect on the very next
+// call - no restart needed.
+function getTwilioClient() {
+  return twilio(telephonyConfig.twilioAccountSid, telephonyConfig.twilioAuthToken);
+}
+
+const TELNYX_API_BASE = 'https://api.telnyx.com/v2';
+
+// Thin wrapper around Telnyx's Call Control REST API (same shape for every
+// command: POST a JSON body, get `{ data: {...} }` back). Not verified
+// against a live Telnyx account from the sandbox this was built in - the
+// request/webhook shapes match Telnyx's published API reference as of when
+// this was written, but test a real outbound call before relying on it.
+async function telnyxRequest(method, pathSuffix, body) {
+  const res = await fetch(`${TELNYX_API_BASE}${pathSuffix}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${telephonyConfig.telnyxApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = data?.errors?.[0]?.detail || data?.errors?.[0]?.title || res.statusText;
+    throw new Error(`Telnyx API error (${res.status}): ${detail}`);
+  }
+  return data;
+}
+
+// callControlId -> { to } for calls placed via Telnyx, from dial time until
+// the webhook flow either starts the media stream or hangs the call up.
+// Needed because unlike Twilio's synchronous /voice fetch, Telnyx's dial
+// call returns immediately and the callee number has to be recovered later
+// from a webhook that only carries the call_control_id.
+const pendingTelnyxCalls = new Map();
 
 // ---- TTS, via Deepgram Aura ------------------------------------------------
 // One vendor for both STT and TTS (same DEEPGRAM_API_KEY). Used by live
@@ -830,6 +901,38 @@ async function ensureGenericOpeningClip() {
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+
+// ---- Admin auth -------------------------------------------------------------
+// Gates the admin panel (admin.html) and every /admin/* API route behind a
+// single shared password (HTTP Basic Auth - the browser's native login
+// prompt, cached per-origin so the admin panel's own fetch() calls stay
+// authenticated automatically once entered). Off by default if
+// ADMIN_PASSWORD isn't set, matching this project's original "no login yet"
+// state - set it in .env to lock the panel down. This protects credentials
+// like the Telnyx/Twilio API keys now editable from Settings > Telephony.
+const { ADMIN_PASSWORD } = process.env;
+if (!ADMIN_PASSWORD) {
+  console.warn('ADMIN_PASSWORD is not set - the admin panel and its API are unauthenticated. Set ADMIN_PASSWORD in .env to require a login.');
+}
+
+function requireAdminAuth(req, res, next) {
+  if (!ADMIN_PASSWORD) return next();
+  const header = req.headers.authorization || '';
+  const [scheme, encoded] = header.split(' ');
+  if (scheme === 'Basic' && encoded) {
+    const decoded = Buffer.from(encoded, 'base64').toString('utf-8');
+    const password = decoded.slice(decoded.indexOf(':') + 1);
+    if (password === ADMIN_PASSWORD) return next();
+  }
+  res.set('WWW-Authenticate', 'Basic realm="PinkTree Admin"');
+  return res.status(401).send('Authentication required');
+}
+
+app.get('/admin.html', requireAdminAuth, (req, res) => {
+  res.sendFile(path.resolve('public/admin.html'));
+});
+app.use('/admin', requireAdminAuth);
+
 app.use(express.static('public'));
 
 // ---- 1. Outbound call trigger ----------------------------------------------
@@ -849,8 +952,23 @@ app.post('/call', async (req, res) => {
   if (activeCallSids.size >= appConfig.maxConcurrentCalls) {
     return res.status(429).json({ error: 'at max concurrent call capacity, try again shortly' });
   }
-  if (!appConfig.twilioPhoneNumber) {
-    return res.status(500).json({ error: 'no outbound caller ID configured - set it in Settings or TWILIO_PHONE_NUMBER' });
+
+  const provider = telephonyConfig.provider || 'twilio';
+
+  if (provider === 'twilio') {
+    if (!telephonyConfig.twilioAccountSid || !telephonyConfig.twilioAuthToken) {
+      return res.status(500).json({ error: 'Twilio is selected as the voice provider but its Account SID / Auth Token are not set - add them in Settings > Telephony' });
+    }
+    if (!telephonyConfig.twilioPhoneNumber) {
+      return res.status(500).json({ error: 'no outbound caller ID configured - set it in Settings > Telephony' });
+    }
+  } else {
+    if (!telephonyConfig.telnyxApiKey || !telephonyConfig.telnyxConnectionId) {
+      return res.status(500).json({ error: 'Telnyx is selected as the voice provider but its API Key / Connection ID are not set - add them in Settings > Telephony' });
+    }
+    if (!telephonyConfig.telnyxPhoneNumber) {
+      return res.status(500).json({ error: 'no outbound caller ID configured - set it in Settings > Telephony' });
+    }
   }
 
   // Already called this number before? Block unless the caller explicitly
@@ -867,24 +985,159 @@ app.post('/call', async (req, res) => {
   }
 
   try {
-    const call = await twilioClient.calls.create({
-      to,
-      from: appConfig.twilioPhoneNumber,
-      url: `https://${PUBLIC_HOSTNAME}/voice`, // Twilio fetches TwiML from here once answered
-      // Synchronous machine detection: Twilio delays connecting the call
-      // until it decides human vs. machine, then passes AnsweredBy to /voice.
-      machineDetection: 'DetectMessageEnd',
-      machineDetectionTimeout: 15,
-      statusCallback: `https://${PUBLIC_HOSTNAME}/call-status`,
-      statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-    });
-    logCallEvent({ event: 'call_initiated', callSid: call.sid, to });
-    res.json({ sid: call.sid, status: call.status });
+    if (provider === 'twilio') {
+      const call = await getTwilioClient().calls.create({
+        to,
+        from: telephonyConfig.twilioPhoneNumber,
+        url: `https://${PUBLIC_HOSTNAME}/voice`, // Twilio fetches TwiML from here once answered
+        // Synchronous machine detection: Twilio delays connecting the call
+        // until it decides human vs. machine, then passes AnsweredBy to /voice.
+        machineDetection: 'DetectMessageEnd',
+        machineDetectionTimeout: 15,
+        statusCallback: `https://${PUBLIC_HOSTNAME}/call-status`,
+        statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+      });
+      logCallEvent({ event: 'call_initiated', callSid: call.sid, to, provider: 'twilio' });
+      res.json({ sid: call.sid, status: call.status });
+    } else {
+      // Telnyx's dial call returns before the call connects - everything
+      // past this point (machine detection, opening the media stream,
+      // voicemail playback) is driven by webhooks to /telnyx/webhook.
+      const result = await telnyxRequest('POST', '/calls', {
+        connection_id: telephonyConfig.telnyxConnectionId,
+        to,
+        from: telephonyConfig.telnyxPhoneNumber,
+        webhook_url: `https://${PUBLIC_HOSTNAME}/telnyx/webhook`,
+        answering_machine_detection: 'premium',
+      });
+      const callControlId = result.data.call_control_id;
+      pendingTelnyxCalls.set(callControlId, { to });
+      logCallEvent({ event: 'call_initiated', callSid: callControlId, to, provider: 'telnyx' });
+      res.json({ sid: callControlId, status: 'queued' });
+    }
   } catch (err) {
     console.error('Call creation failed:', err);
     res.status(500).json({ error: err.message });
   }
 });
+
+// ---- Telnyx Call Control webhooks -------------------------------------------
+// Telnyx's dial API is asynchronous - unlike Twilio's synchronous /voice
+// fetch, everything after the call connects (machine detection result,
+// opening the media stream, playing the voicemail clip, hanging up) arrives
+// here as a sequence of webhook events instead. Ack every event with 200
+// immediately - Telnyx retries on anything else - and do the actual work
+// afterward.
+app.post('/telnyx/webhook', async (req, res) => {
+  res.sendStatus(200);
+
+  const eventType = req.body?.data?.event_type;
+  const payload = req.body?.data?.payload || {};
+  const callControlId = payload.call_control_id;
+  if (!callControlId) return;
+
+  try {
+    switch (eventType) {
+      case 'call.answered':
+        // Nothing to do yet - wait for the AMD result below before deciding
+        // whether to open the media stream or play the voicemail clip. As a
+        // safety net in case AMD never reports back (a Telnyx-side error,
+        // or answering_machine_detection getting turned off in a future
+        // edit here), fall back to starting the stream after a few seconds.
+        pendingTelnyxCalls.set(callControlId, {
+          ...(pendingTelnyxCalls.get(callControlId) || {}),
+          amdFallbackTimer: setTimeout(() => {
+            startTelnyxMediaStream(callControlId).catch((err) =>
+              console.error('Telnyx stream start (AMD fallback) failed:', err.message)
+            );
+          }, 8000),
+        });
+        break;
+
+      case 'call.machine.premium.detection.ended':
+      case 'call.machine.detection.ended': {
+        const pending = pendingTelnyxCalls.get(callControlId);
+        clearTimeout(pending?.amdFallbackTimer);
+        const result = payload.result; // human_residence, human_business, machine, silence, fax_detected, not_sure
+        if (result === 'machine' || result === 'fax_detected') {
+          logCallEvent({ event: 'voicemail_detected', callSid: callControlId, answeredBy: result });
+          await playTelnyxVoicemail(callControlId);
+        } else {
+          await startTelnyxMediaStream(callControlId);
+        }
+        break;
+      }
+
+      case 'call.playback.ended':
+        // Voicemail clip (or its TTS fallback) finished - hang up, same as
+        // Twilio's twiml.hangup() right after twiml.play() in /voice.
+        await telnyxRequest('POST', `/calls/${callControlId}/actions/hangup`).catch(() => {});
+        break;
+
+      case 'call.hangup':
+        logCallEvent({
+          event: 'status_update',
+          callSid: callControlId,
+          status: 'completed',
+          durationSeconds: payload.call_duration_secs,
+        });
+        clearTimeout(pendingTelnyxCalls.get(callControlId)?.amdFallbackTimer);
+        pendingTelnyxCalls.delete(callControlId);
+        activeCallSids.delete(callControlId);
+        break;
+    }
+  } catch (err) {
+    console.error(`Telnyx webhook handling failed (${eventType}):`, err.message);
+  }
+});
+
+// Opens the bidirectional media stream to /media-stream for a Telnyx call -
+// the Telnyx equivalent of Twilio's <Connect><Stream> in /voice. custom
+// parameters carry the callSid/toNumber/company through to CallSession the
+// same way Twilio's <Stream> <Parameter> tags do.
+async function startTelnyxMediaStream(callControlId) {
+  const pending = pendingTelnyxCalls.get(callControlId) || {};
+  if (pending.streamed) return; // already started (e.g. AMD result raced the fallback timer)
+  pending.streamed = true;
+  pendingTelnyxCalls.set(callControlId, pending);
+
+  const toNumber = pending.to || '';
+  const contact = readContacts().find((c) => c.phone === toNumber);
+  await telnyxRequest('POST', `/calls/${callControlId}/actions/streaming_start`, {
+    stream_url: `wss://${PUBLIC_HOSTNAME}/media-stream`,
+    stream_track: 'inbound_track',
+    stream_bidirectional_mode: 'rtp',
+    stream_bidirectional_codec: 'PCMU', // G.711 mu-law - matches our mulaw/8kHz pipeline directly, no transcoding
+    stream_bidirectional_sampling_rate: 8000,
+    custom_parameters: [
+      { name: 'callSid', value: callControlId },
+      { name: 'toNumber', value: toNumber },
+      { name: 'company', value: contact?.company || '' },
+    ],
+  });
+}
+
+// Telnyx equivalent of the voicemail branch in /voice: play the same
+// pre-generated Aura clip, or fall back to Telnyx's own TTS if it's missing.
+async function playTelnyxVoicemail(callControlId) {
+  if (fsSync.existsSync('./public/voicemail.mp3')) {
+    await telnyxRequest('POST', `/calls/${callControlId}/actions/playback_start`, {
+      audio_url: `https://${PUBLIC_HOSTNAME}/voicemail.mp3`,
+    });
+    // hang up is triggered by the call.playback.ended webhook above
+  } else {
+    await telnyxRequest('POST', `/calls/${callControlId}/actions/speak`, {
+      payload: VOICEMAIL_TEXT,
+      voice: 'female',
+      language: 'en-US',
+    });
+    // No playback.ended-equivalent guarantee for /speak in every case -
+    // hang up after a fixed delay as a fallback instead.
+    setTimeout(() => {
+      telnyxRequest('POST', `/calls/${callControlId}/actions/hangup`).catch(() => {});
+    }, 6000);
+  }
+}
 
 // ---- Test chat panel: exercise the sales script without touching Twilio ---
 // In-memory only - fine for testing script/prompt changes, not meant to
@@ -1066,9 +1319,8 @@ app.get('/admin/app-config', (req, res) => {
 });
 
 app.post('/admin/app-config', (req, res) => {
-  const { twilioPhoneNumber, callHoursTz, callHoursStart, callHoursEnd, maxConcurrentCalls, openRouterModel, classifierModel, utteranceEndMs } = req.body;
+  const { callHoursTz, callHoursStart, callHoursEnd, maxConcurrentCalls, openRouterModel, classifierModel, utteranceEndMs } = req.body;
   const next = {
-    twilioPhoneNumber: twilioPhoneNumber || null,
     callHoursTz: callHoursTz || DEFAULT_APP_CONFIG.callHoursTz,
     callHoursStart: Number.isFinite(+callHoursStart) ? +callHoursStart : DEFAULT_APP_CONFIG.callHoursStart,
     callHoursEnd: Number.isFinite(+callHoursEnd) ? +callHoursEnd : DEFAULT_APP_CONFIG.callHoursEnd,
@@ -1086,6 +1338,50 @@ app.post('/admin/app-config/reset', (req, res) => {
   appConfig = { ...DEFAULT_APP_CONFIG };
   fsSync.writeFileSync(APP_CONFIG_PATH, JSON.stringify(appConfig, null, 2));
   res.json({ config: appConfig });
+});
+
+// ---- Telephony provider + credentials --------------------------------------
+// Which service places outbound calls (Twilio or Telnyx) and that
+// provider's credentials, editable from Settings > Telephony. Unlike most
+// other admin-editable config, this intentionally DOES include secrets
+// (Account SID/Auth Token, API key) - GET returns them as-is so the panel
+// can populate the form for editing. Same caveat as the rest of this admin
+// panel: there's no login yet, so treat this endpoint as effectively public
+// until one exists.
+app.get('/admin/telephony-config', (req, res) => {
+  res.json({ config: telephonyConfig, isDefault: JSON.stringify(telephonyConfig) === JSON.stringify(DEFAULT_TELEPHONY_CONFIG) });
+});
+
+app.post('/admin/telephony-config', (req, res) => {
+  const {
+    provider,
+    twilioAccountSid,
+    twilioAuthToken,
+    twilioPhoneNumber,
+    telnyxApiKey,
+    telnyxConnectionId,
+    telnyxPhoneNumber,
+  } = req.body;
+  if (provider !== 'twilio' && provider !== 'telnyx') {
+    return res.status(400).json({ error: 'provider must be "twilio" or "telnyx"' });
+  }
+  telephonyConfig = {
+    provider,
+    twilioAccountSid: twilioAccountSid || '',
+    twilioAuthToken: twilioAuthToken || '',
+    twilioPhoneNumber: twilioPhoneNumber || '',
+    telnyxApiKey: telnyxApiKey || '',
+    telnyxConnectionId: telnyxConnectionId || '',
+    telnyxPhoneNumber: telnyxPhoneNumber || '',
+  };
+  fsSync.writeFileSync(TELEPHONY_CONFIG_PATH, JSON.stringify(telephonyConfig, null, 2));
+  res.sendStatus(204);
+});
+
+app.post('/admin/telephony-config/reset', (req, res) => {
+  telephonyConfig = { ...DEFAULT_TELEPHONY_CONFIG };
+  fsSync.writeFileSync(TELEPHONY_CONFIG_PATH, JSON.stringify(telephonyConfig, null, 2));
+  res.json({ config: telephonyConfig });
 });
 
 // ---- Request logs + cost summary ------------------------------------------
@@ -1474,9 +1770,9 @@ app.get('/health', (req, res) => res.sendStatus(200));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/media-stream' });
 
-wss.on('connection', (twilioWs) => {
-  console.log('Twilio media stream connected');
-  new CallSession(twilioWs);
+wss.on('connection', (ws) => {
+  console.log('Media stream connected');
+  new CallSession(ws);
 });
 
 const VOICEMAIL_TEXT =
@@ -1502,6 +1798,7 @@ loadSystemPrompt();
 loadOpeningTemplate();
 loadTtsConfig();
 loadAppConfig();
+loadTelephonyConfig();
 
 // Voicemail audio is a nice-to-have, not core to the service - a bad
 // AURA_MODEL or a transient Deepgram error shouldn't crash-loop the whole
@@ -1534,13 +1831,20 @@ server.listen(PORT, () => console.log(`Listening on :${PORT}`));
 // =============================================================================
 // CallSession: one instance per phone call. Owns the Deepgram connection,
 // the conversation state, and the Aura TTS streaming, and wires them to the
-// Twilio Media Stream WebSocket.
+// telephony provider's Media Stream WebSocket - Twilio or Telnyx, whichever
+// placed the call. Both providers speak a near-identical protocol (a
+// "start" frame with metadata, then "media" frames of base64 mu-law audio),
+// so this class detects which one it's talking to from the shape of the
+// "start" frame and adapts the outgoing frame format (sendMedia/sendClear)
+// accordingly - everything else (Deepgram, the LLM loop, TTS) is identical
+// either way.
 // =============================================================================
 class CallSession {
-  constructor(twilioWs) {
-    this.twilioWs = twilioWs;
-    this.streamSid = null;
-    this.callSid = null;
+  constructor(ws) {
+    this.ws = ws;
+    this.provider = null; // 'twilio' | 'telnyx' - set once the start frame arrives
+    this.streamId = null; // Twilio's streamSid / Telnyx's stream_id
+    this.callSid = null; // Twilio's CallSid / Telnyx's call_control_id
     this.history = []; // Anthropic message history: [{role, content}]
     this.speaking = false; // true while our TTS audio is playing out to the caller
     this.finalTranscriptBuffer = '';
@@ -1552,7 +1856,7 @@ class CallSession {
     this.knownOutcome = null;
 
     this.setupDeepgram();
-    this.setupTwilioHandlers();
+    this.setupMediaHandlers();
   }
 
   setupDeepgram() {
@@ -1613,19 +1917,35 @@ class CallSession {
     });
   }
 
-  setupTwilioHandlers() {
-    this.twilioWs.on('message', (msg) => {
+  setupMediaHandlers() {
+    this.ws.on('message', (msg) => {
       const data = JSON.parse(msg);
 
       switch (data.event) {
+        case 'connected':
+          // Telnyx-only - first frame on the socket, purely informational.
+          break;
+
         case 'start':
-          this.streamSid = data.start.streamSid;
-          this.callSid = data.start.customParameters?.callSid || null;
-          this.toNumber = data.start.customParameters?.toNumber || null;
-          this.contactCompany = data.start.customParameters?.company || '';
+          // Twilio: { start: { streamSid, customParameters: {...} } }
+          // Telnyx:  { stream_id, start: { custom_parameters: {...}, call_control_id, to } }
+          if (data.start?.streamSid) {
+            this.provider = 'twilio';
+            this.streamId = data.start.streamSid;
+            this.callSid = data.start.customParameters?.callSid || null;
+            this.toNumber = data.start.customParameters?.toNumber || null;
+            this.contactCompany = data.start.customParameters?.company || '';
+          } else {
+            this.provider = 'telnyx';
+            this.streamId = data.stream_id;
+            const params = data.start?.custom_parameters || {};
+            this.callSid = params.callSid || data.start?.call_control_id || null;
+            this.toNumber = params.toNumber || data.start?.to || null;
+            this.contactCompany = params.company || '';
+          }
           activeCallSids.add(this.callSid);
-          console.log('Stream started:', this.streamSid, 'call:', this.callSid);
-          logCallEvent({ event: 'stream_started', callSid: this.callSid, streamSid: this.streamSid });
+          console.log(`Stream started (${this.provider}):`, this.streamId, 'call:', this.callSid);
+          logCallEvent({ event: 'stream_started', callSid: this.callSid, streamSid: this.streamId, provider: this.provider });
           // Kick off the conversation with an opening line instead of waiting
           this.handleUserUtterance('[CALL_CONNECTED]');
           break;
@@ -1645,12 +1965,34 @@ class CallSession {
       }
     });
 
-    this.twilioWs.on('close', () => {
-      console.log('Twilio WS closed');
+    this.ws.on('close', () => {
+      console.log('Media stream WS closed');
       activeCallSids.delete(this.callSid);
       clearTimeout(this.bargeInTimer);
       this.dgConnection.finish();
     });
+  }
+
+  // Outgoing audio frame, in whichever shape the connected provider expects.
+  // Twilio requires streamSid on every media frame; Telnyx's bidirectional
+  // client frames don't carry an id at all (see clientMedia in Telnyx's
+  // Media Streaming WebSocket spec).
+  sendMedia(payloadBase64) {
+    if (this.provider === 'telnyx') {
+      this.ws.send(JSON.stringify({ event: 'media', media: { payload: payloadBase64 } }));
+    } else {
+      this.ws.send(JSON.stringify({ event: 'media', streamSid: this.streamId, media: { payload: payloadBase64 } }));
+    }
+  }
+
+  // Barge-in: stop whatever's queued/playing. Same shape difference as
+  // sendMedia above - Telnyx's clear frame has no id, Twilio's needs streamSid.
+  sendClear() {
+    if (this.provider === 'telnyx') {
+      this.ws.send(JSON.stringify({ event: 'clear' }));
+    } else {
+      this.ws.send(JSON.stringify({ event: 'clear', streamSid: this.streamId }));
+    }
   }
 
   // Caller finished a turn (or the call just connected) -> ask the LLM what
@@ -1778,13 +2120,7 @@ class CallSession {
     if (backchannelClips.length === 0 || this.turnCancelled) return;
     const clip = backchannelClips[Math.floor(Math.random() * backchannelClips.length)];
     this.speaking = true;
-    this.twilioWs.send(
-      JSON.stringify({
-        event: 'media',
-        streamSid: this.streamSid,
-        media: { payload: clip.toString('base64') },
-      })
-    );
+    this.sendMedia(clip.toString('base64'));
   }
 
   // First sentence of a turn: play audio as it streams in from Aura rather
@@ -1824,13 +2160,7 @@ class CallSession {
 
       for await (const chunk of res.body) {
         if (this.currentUtteranceInterrupted) break; // barge-in cut this off
-        this.twilioWs.send(
-          JSON.stringify({
-            event: 'media',
-            streamSid: this.streamSid,
-            media: { payload: Buffer.from(chunk).toString('base64') },
-          })
-        );
+        this.sendMedia(Buffer.from(chunk).toString('base64'));
       }
       logRequestEvent({
         type: 'tts',
@@ -1870,13 +2200,7 @@ class CallSession {
       for (let i = 0; i < buffer.length; i += FRAME_BYTES) {
         if (this.currentUtteranceInterrupted) break;
         const frame = buffer.subarray(i, i + FRAME_BYTES);
-        this.twilioWs.send(
-          JSON.stringify({
-            event: 'media',
-            streamSid: this.streamSid,
-            media: { payload: frame.toString('base64') },
-          })
-        );
+        this.sendMedia(frame.toString('base64'));
       }
       if (!this.currentUtteranceInterrupted) this.sendPause();
     } finally {
@@ -1887,23 +2211,21 @@ class CallSession {
   // Natural pause between sentences - G.711 mu-law silence is 0xFF.
   sendPause() {
     const silence = Buffer.alloc(SENTENCE_PAUSE_SAMPLES, 0xff);
-    this.twilioWs.send(
-      JSON.stringify({
-        event: 'media',
-        streamSid: this.streamSid,
-        media: { payload: silence.toString('base64') },
-      })
-    );
+    this.sendMedia(silence.toString('base64'));
   }
 
-  // Ends the call immediately via Twilio's REST API. Used once we're
-  // certain there's no reason to keep the line open (opt-out confirmed) -
-  // every extra second here is a second of Twilio/Deepgram minutes billed
-  // on a call that's already resolved.
+  // Ends the call immediately via the connected provider's REST API. Used
+  // once we're certain there's no reason to keep the line open (opt-out
+  // confirmed) - every extra second here is a second of telephony/Deepgram
+  // minutes billed on a call that's already resolved.
   async endCall() {
     if (!this.callSid) return;
     try {
-      await twilioClient.calls(this.callSid).update({ status: 'completed' });
+      if (this.provider === 'telnyx') {
+        await telnyxRequest('POST', `/calls/${this.callSid}/actions/hangup`);
+        return;
+      }
+      await getTwilioClient().calls(this.callSid).update({ status: 'completed' });
     } catch (err) {
       console.error('Failed to end call via REST API:', err.message);
     }
@@ -1961,7 +2283,7 @@ class CallSession {
     logCallEvent({
       event: 'stream_ended',
       callSid: this.callSid,
-      streamSid: this.streamSid,
+      streamSid: this.streamId,
       outcome,
       transcript: this.history,
     });
@@ -1972,8 +2294,6 @@ class CallSession {
   interrupt() {
     this.currentUtteranceInterrupted = true;
     this.turnCancelled = true;
-    this.twilioWs.send(
-      JSON.stringify({ event: 'clear', streamSid: this.streamSid })
-    );
+    this.sendClear();
   }
 }

@@ -382,7 +382,7 @@
         </div>
         <div class="providerTabs">
           <button type="button" data-provider="twilio" class="active">Twilio</button>
-          <button type="button" data-provider="telnyx">Telnyx<span class="badge-unbuilt">not yet wired up</span></button>
+          <button type="button" data-provider="telnyx">Telnyx</button>
         </div>
 
         <div class="providerFields active" id="telFields-twilio" style="grid-template-columns: 1fr 1fr; gap:12px;">
@@ -409,11 +409,12 @@
           </label>
         </div>
 
-        <div class="fieldnote warn" id="telUnbuiltNote" style="display:none;">
-          Telnyx credentials save fine, but outbound calls still route through
-          the Twilio-shaped call-control code underneath — placing a call
-          with Telnyx selected will fail until that integration is actually
-          built. Saving this now just means it's ready the moment that lands.
+        <div class="fieldnote" id="telUnbuiltNote" style="display:none;">
+          Telnyx calls route through Telnyx's Call Control API and webhooks
+          instead of Twilio's synchronous TwiML flow. Make sure this
+          server's <code>PUBLIC_HOSTNAME</code> is reachable from the
+          internet (same requirement as Twilio) so Telnyx can reach
+          <code>/telnyx/webhook</code> and open the media stream.
         </div>
 
         <div class="scriptActions">
@@ -1260,4 +1261,3 @@
 </script>
 </body>
 </html>
-

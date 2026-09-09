@@ -901,38 +901,6 @@ async function ensureGenericOpeningClip() {
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
-
-// ---- Admin auth -------------------------------------------------------------
-// Gates the admin panel (admin.html) and every /admin/* API route behind a
-// single shared password (HTTP Basic Auth - the browser's native login
-// prompt, cached per-origin so the admin panel's own fetch() calls stay
-// authenticated automatically once entered). Off by default if
-// ADMIN_PASSWORD isn't set, matching this project's original "no login yet"
-// state - set it in .env to lock the panel down. This protects credentials
-// like the Telnyx/Twilio API keys now editable from Settings > Telephony.
-const { ADMIN_PASSWORD } = process.env;
-if (!ADMIN_PASSWORD) {
-  console.warn('ADMIN_PASSWORD is not set - the admin panel and its API are unauthenticated. Set ADMIN_PASSWORD in .env to require a login.');
-}
-
-function requireAdminAuth(req, res, next) {
-  if (!ADMIN_PASSWORD) return next();
-  const header = req.headers.authorization || '';
-  const [scheme, encoded] = header.split(' ');
-  if (scheme === 'Basic' && encoded) {
-    const decoded = Buffer.from(encoded, 'base64').toString('utf-8');
-    const password = decoded.slice(decoded.indexOf(':') + 1);
-    if (password === ADMIN_PASSWORD) return next();
-  }
-  res.set('WWW-Authenticate', 'Basic realm="PinkTree Admin"');
-  return res.status(401).send('Authentication required');
-}
-
-app.get('/admin.html', requireAdminAuth, (req, res) => {
-  res.sendFile(path.resolve('public/admin.html'));
-});
-app.use('/admin', requireAdminAuth);
-
 app.use(express.static('public'));
 
 // ---- 1. Outbound call trigger ----------------------------------------------

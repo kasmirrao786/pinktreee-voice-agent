@@ -63,6 +63,11 @@
   .brand .tagline { margin-top: 4px; font-size: 10.5px; color: var(--sidebar-dim); line-height: 1.4; }
 
   nav.navlist { flex: 1; padding: 10px 0; overflow-y: auto; }
+  .navSection { margin-bottom: 4px; }
+  .navSectionLabel {
+    padding: 12px 18px 6px; font-size: 10px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--sidebar-dim); opacity: 0.6;
+  }
   .tab {
     display: flex; align-items: center; gap: 9px; padding: 8px 18px; font-size: 12.5px;
     color: var(--sidebar-dim); cursor: pointer; border-left: 2px solid transparent;
@@ -188,6 +193,12 @@
   .providerTabs { display: flex; gap: 6px; margin-bottom: 12px; }
   .providerTabs button { padding: 7px 14px; font-size: 11.5px; border-radius: 20px; cursor: pointer; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-soft); font-weight: 500; }
   .providerTabs button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  .settingsTabs { display: flex; gap: 4px; margin-bottom: 22px; border-bottom: 1px solid var(--line); padding-bottom: 0; }
+  .settingsTabs button { padding: 9px 4px; margin-right: 18px; font-size: 12.5px; cursor: pointer; border: none; border-bottom: 2px solid transparent; background: none; color: var(--ink-mute); font-weight: 500; }
+  .settingsTabs button.active { color: var(--ink); border-bottom-color: var(--ink); }
+  .settingsSubPanel { display: none; }
+  .settingsSubPanel.active { display: block; }
   .providerFields { display: none; }
   .providerFields.active { display: grid; }
 
@@ -207,6 +218,8 @@
     .sidebar { width: 100%; height: auto; position: relative; flex-direction: row; align-items: center; }
     .brand { border-bottom: none; border-right: 1px solid var(--sidebar-line); padding: 14px 16px; }
     nav.navlist { display: flex; overflow-x: auto; padding: 0; }
+    .navSection { display: contents; }
+    .navSectionLabel { display: none; }
     .tab { border-left: none; border-bottom: 2px solid transparent; padding: 14px 12px; }
     .tab.active { border-left: none; border-bottom-color: #fff; }
     .sidebar-foot { display: none; }
@@ -223,35 +236,50 @@
         <div class="tagline">Voice agent console — test calls, review activity, nothing here dials a real number from this screen alone.</div>
       </div>
       <nav class="navlist">
-        <div class="tab active" data-tab="voice" data-title="Voice test" data-sub="Talk to the agent live through your microphone.">
-          <span class="dot"></span>Voice test
+        <div class="navSection">
+          <div class="navSectionLabel">Test</div>
+          <div class="tab active" data-tab="voice" data-title="Voice test" data-sub="Talk to the agent live through your microphone.">
+            <span class="dot"></span>Voice test
+          </div>
+          <div class="tab" data-tab="text" data-title="Text test" data-sub="Type turns back and forth with the agent instead of speaking.">
+            <span class="dot"></span>Text test
+          </div>
+          <div class="tab" data-tab="bulktest" data-title="Bulk test" data-sub="Run canned caller scripts through the real pipeline, no phone call.">
+            <span class="dot"></span>Bulk test
+          </div>
         </div>
-        <div class="tab" data-tab="text" data-title="Text test" data-sub="Type turns back and forth with the agent instead of speaking.">
-          <span class="dot"></span>Text test
+
+        <div class="navSection">
+          <div class="navSectionLabel">Operate</div>
+          <div class="tab" data-tab="contacts" data-title="Contacts" data-sub="Import a list and place calls to individual contacts.">
+            <span class="dot"></span>Contacts
+          </div>
+          <div class="tab" data-tab="logs" data-title="Call logs" data-sub="Every call event, in order.">
+            <span class="dot"></span>Call logs
+          </div>
+          <div class="tab" data-tab="dnc" data-title="Do-not-call" data-sub="Numbers the agent will never dial.">
+            <span class="dot"></span>Do-not-call
+          </div>
         </div>
-        <div class="tab" data-tab="script" data-title="Script" data-sub="Edit the opening line and the full call script the agent follows.">
-          <span class="dot"></span>Script
+
+        <div class="navSection">
+          <div class="navSectionLabel">Insights</div>
+          <div class="tab" data-tab="analytics" data-title="Analytics" data-sub="Outcomes and call volume over time.">
+            <span class="dot"></span>Analytics
+          </div>
+          <div class="tab" data-tab="costs" data-title="Costs" data-sub="Estimated spend by provider and model.">
+            <span class="dot"></span>Costs
+          </div>
         </div>
-        <div class="tab" data-tab="contacts" data-title="Contacts" data-sub="Import a list and place calls to individual contacts.">
-          <span class="dot"></span>Contacts
-        </div>
-        <div class="tab" data-tab="logs" data-title="Call logs" data-sub="Every call event, in order.">
-          <span class="dot"></span>Call logs
-        </div>
-        <div class="tab" data-tab="dnc" data-title="Do-not-call" data-sub="Numbers the agent will never dial.">
-          <span class="dot"></span>Do-not-call
-        </div>
-        <div class="tab" data-tab="analytics" data-title="Analytics" data-sub="Outcomes and call volume over time.">
-          <span class="dot"></span>Analytics
-        </div>
-        <div class="tab" data-tab="settings" data-title="Settings" data-sub="Telephony, TTS provider, and general call configuration.">
-          <span class="dot"></span>Settings
-        </div>
-        <div class="tab" data-tab="costs" data-title="Costs" data-sub="Estimated spend by provider and model.">
-          <span class="dot"></span>Costs
-        </div>
-        <div class="tab" data-tab="bulktest" data-title="Bulk test" data-sub="Run canned caller scripts through the real pipeline, no phone call.">
-          <span class="dot"></span>Bulk test
+
+        <div class="navSection">
+          <div class="navSectionLabel">Configure</div>
+          <div class="tab" data-tab="script" data-title="Script" data-sub="Edit the opening line and the full call script the agent follows.">
+            <span class="dot"></span>Script
+          </div>
+          <div class="tab" data-tab="settings" data-title="Settings" data-sub="Telephony, TTS provider, and general call configuration.">
+            <span class="dot"></span>Settings
+          </div>
         </div>
       </nav>
       <div class="sidebar-foot">
@@ -269,17 +297,31 @@
       </div>
 
       <div class="panel active" id="panel-voice">
-        <div id="voiceChat"></div>
-        <button id="recordBtn">Hold to talk</button>
-        <div class="hint">Press and hold, speak your reply, release when done.</div>
+        <div id="voiceIdle" class="empty" style="padding: 40px 0; text-align:center;">
+          <div style="margin-bottom:14px; color: var(--ink-mute); font-size:12.5px;">Nothing is running yet — starting this uses a real LLM + TTS request, same as it would with a caller.</div>
+          <button id="voiceStartBtn" style="padding: 10px 20px; border-radius: var(--radius); background: var(--ink); color:#fff; border:1px solid var(--ink); cursor:pointer; font-weight:500; font-size:13px;">Start test call</button>
+        </div>
+        <div id="voiceActive" style="display:none;">
+          <div id="voiceChat"></div>
+          <button id="recordBtn">Hold to talk</button>
+          <div class="hint">Press and hold, speak your reply, release when done.</div>
+          <button id="voiceEndBtn" style="margin-top:10px; background:none; border:1px solid var(--line-strong); color:var(--ink-mute); padding:7px 13px; border-radius:var(--radius); cursor:pointer; font-size:11px;">End test call</button>
+        </div>
       </div>
 
       <div class="panel" id="panel-text">
-        <div id="textChat"></div>
-        <form id="textForm">
-          <input id="textInput" autocomplete="off" placeholder="Type your reply as the callee..." />
-          <button type="submit">Send</button>
-        </form>
+        <div id="textIdle" class="empty" style="padding: 40px 0; text-align:center;">
+          <div style="margin-bottom:14px; color: var(--ink-mute); font-size:12.5px;">Nothing is running yet — starting this uses a real LLM request, same as it would with a caller.</div>
+          <button id="textStartBtn" style="padding: 10px 20px; border-radius: var(--radius); background: var(--ink); color:#fff; border:1px solid var(--ink); cursor:pointer; font-weight:500; font-size:13px;">Start test chat</button>
+        </div>
+        <div id="textActive" style="display:none;">
+          <div id="textChat"></div>
+          <form id="textForm">
+            <input id="textInput" autocomplete="off" placeholder="Type your reply as the callee..." />
+            <button type="submit">Send</button>
+          </form>
+          <button id="textEndBtn" type="button" style="margin-top:10px; background:none; border:1px solid var(--line-strong); color:var(--ink-mute); padding:7px 13px; border-radius:var(--radius); cursor:pointer; font-size:11px;">End test chat</button>
+        </div>
       </div>
 
       <div class="panel" id="panel-script">
@@ -304,6 +346,22 @@
       </div>
 
       <div class="panel" id="panel-contacts">
+        <div id="campaignBox" style="border:1px solid var(--line); border-radius: var(--radius); padding:14px 16px; margin-bottom:18px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+            <div>
+              <div style="font-weight:500; font-size:13px;">Auto-dialer</div>
+              <div id="campaignStatusLine" style="font-size:11.5px; color:var(--ink-mute); margin-top:2px;">Idle.</div>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <label style="font-size:11px; color:var(--ink-mute); display:flex; align-items:center; gap:5px;">
+                <input type="checkbox" id="campaignIncludeCalled" style="margin:0;" />Include already-called
+              </label>
+              <button id="campaignStartBtn" style="padding: 8px 16px; border-radius: var(--radius); background: var(--ink); color:#fff; border:1px solid var(--ink); cursor:pointer; font-weight:500; font-size:12px;">Start campaign</button>
+              <button id="campaignStopBtn" style="display:none; padding: 8px 16px; border-radius: var(--radius); background:none; border:1px solid var(--bad-ink); color:var(--bad-ink); cursor:pointer; font-weight:500; font-size:12px;">Stop</button>
+            </div>
+          </div>
+        </div>
+
         <div id="importRow">
           <input type="file" id="importFile" accept=".csv,.xlsx,.xls" />
           <button id="importBtn">Import</button>
@@ -351,7 +409,13 @@
       </div>
 
       <div class="panel" id="panel-settings">
-        <h3 class="sectionTitle">Telephony</h3>
+        <div class="settingsTabs" id="settingsSubTabs">
+          <button type="button" data-subtab="telephony" class="active">Telephony</button>
+          <button type="button" data-subtab="tts">TTS provider</button>
+          <button type="button" data-subtab="general">General</button>
+        </div>
+
+        <div class="settingsSubPanel active" id="settingsSub-telephony">
         <div class="fieldnote" style="margin-top:0;">
           Pick which provider places your outbound calls, and enter its
           credentials here instead of an environment variable — change
@@ -399,8 +463,9 @@
           <button id="telResetBtn" type="button">Clear</button>
           <span id="telStatus"></span>
         </div>
+        </div>
 
-        <h3 class="sectionTitle">Live-call TTS provider</h3>
+        <div class="settingsSubPanel" id="settingsSub-tts">
         <div class="fieldnote" style="margin-top:0;">
           Only affects the per-sentence speech during a live conversation — the cached clips (opening line, backchannel, fallback, opt-out) always use Deepgram Aura regardless of this setting, since their cost is one-time either way.
         </div>
@@ -425,8 +490,9 @@
           Deepgram: model <code>aura-asteria-en</code>, no voice needed. OpenRouter: model <code>hexgrad/kokoro-82m</code>, voice e.g. <code>af_bella</code>. Self-hosted: model <code>kokoro</code>, base URL pointing at your deployed Kokoro-FastAPI service — use the internal/private network address if it's on the same host as this app, it's meaningfully faster than routing out over the public internet and back.
           <br/>OpenRouter TTS hasn't been confirmed to support true low-latency streaming the way Aura does — the first sentence of a reply may take a bit longer to start playing. Test it in Voice Test before trusting it on real calls.
         </div>
+        </div>
 
-        <h3 class="sectionTitle">General settings</h3>
+        <div class="settingsSubPanel" id="settingsSub-general">
         <div class="fieldnote" style="margin-top:0;">
           Everything below is operational config, not credentials.
         </div>
@@ -457,6 +523,7 @@
           <button id="cfgSaveBtn">Save</button>
           <button id="cfgResetBtn" type="button">Reset to default</button>
           <span id="cfgStatus"></span>
+        </div>
         </div>
       </div>
 
@@ -531,6 +598,10 @@
 
   const voiceChat = document.getElementById('voiceChat');
   const recordBtn = document.getElementById('recordBtn');
+  const voiceIdle = document.getElementById('voiceIdle');
+  const voiceActive = document.getElementById('voiceActive');
+  const voiceStartBtn = document.getElementById('voiceStartBtn');
+  const voiceEndBtn = document.getElementById('voiceEndBtn');
   let mediaRecorder, audioChunks = [], voiceStarted = false;
 
   function addVoiceMsg(role, text) {
@@ -546,7 +617,12 @@
     audio.play();
   }
 
+  // Only ever runs when the admin explicitly clicks "Start test call" -
+  // this hits the real LLM + TTS pipeline, so it should never fire just
+  // from opening this tab or loading the page.
   async function voiceStart() {
+    voiceIdle.style.display = 'none';
+    voiceActive.style.display = 'block';
     voiceChat.innerHTML = '';
     addVoiceMsg('status', 'calling...');
     recordBtn.disabled = true;
@@ -568,6 +644,16 @@
       recordBtn.disabled = false;
     }
   }
+
+  function voiceEnd() {
+    voiceStarted = false;
+    voiceChat.innerHTML = '';
+    voiceActive.style.display = 'none';
+    voiceIdle.style.display = 'block';
+  }
+
+  voiceStartBtn.addEventListener('click', voiceStart);
+  voiceEndBtn.addEventListener('click', voiceEnd);
 
   async function startRecording() {
     if (!voiceStarted) return;
@@ -621,12 +707,14 @@
   recordBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
   recordBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
 
-  voiceStart();
-
   const textChat = document.getElementById('textChat');
   const textForm = document.getElementById('textForm');
   const textInput = document.getElementById('textInput');
-  const textSessionId = 'admin-text-' + Math.random().toString(36).slice(2);
+  const textIdle = document.getElementById('textIdle');
+  const textActive = document.getElementById('textActive');
+  const textStartBtn = document.getElementById('textStartBtn');
+  const textEndBtn = document.getElementById('textEndBtn');
+  let textSessionId = null;
 
   function addTextMsg(role, text) {
     const div = document.createElement('div');
@@ -636,7 +724,14 @@
     textChat.scrollTop = textChat.scrollHeight;
   }
 
+  // Only ever runs when the admin explicitly clicks "Start test chat" -
+  // this hits the real LLM pipeline, so it should never fire just from
+  // opening this tab or loading the page.
   async function textStart() {
+    textSessionId = 'admin-text-' + Math.random().toString(36).slice(2);
+    textIdle.style.display = 'none';
+    textActive.style.display = 'block';
+    textChat.innerHTML = '';
     const res = await fetch('/test/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -647,8 +742,19 @@
     addTextMsg('agent', data.reply);
   }
 
+  function textEnd() {
+    textSessionId = null;
+    textChat.innerHTML = '';
+    textActive.style.display = 'none';
+    textIdle.style.display = 'block';
+  }
+
+  textStartBtn.addEventListener('click', textStart);
+  textEndBtn.addEventListener('click', textEnd);
+
   textForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (!textSessionId) return;
     const message = textInput.value.trim();
     if (!message) return;
     addTextMsg('caller', message);
@@ -662,8 +768,6 @@
     if (data.error) { addTextMsg('agent', 'Error: ' + data.error); return; }
     addTextMsg('agent', data.reply);
   });
-
-  textStart();
 
   async function loadLogs() {
     const res = await fetch('/logs');
@@ -799,6 +903,63 @@
     });
   }
 
+  const campaignStatusLine = document.getElementById('campaignStatusLine');
+  const campaignStartBtn = document.getElementById('campaignStartBtn');
+  const campaignStopBtn = document.getElementById('campaignStopBtn');
+  let campaignPollTimer = null;
+
+  async function refreshCampaignStatus() {
+    try {
+      const res = await fetch('/admin/campaign/status');
+      const s = await res.json();
+      if (s.active) {
+        campaignStartBtn.style.display = 'none';
+        campaignStopBtn.style.display = 'inline-block';
+        campaignStatusLine.textContent =
+          'Running - ' + s.inFlight + '/' + s.maxConcurrentCalls + ' calls in flight, ' +
+          s.queued + ' queued, ' + s.dialedCount + ' dialed so far.';
+        if (!campaignPollTimer) campaignPollTimer = setInterval(refreshCampaignStatus, 4000);
+      } else {
+        campaignStartBtn.style.display = 'inline-block';
+        campaignStopBtn.style.display = 'none';
+        clearInterval(campaignPollTimer);
+        campaignPollTimer = null;
+        campaignStatusLine.textContent = s.dialedCount > 0
+          ? 'Finished - ' + s.dialedCount + ' dialed, ' + s.skippedCount + ' skipped.'
+          : 'Idle.';
+        if (s.finishedAt) loadContacts(); // pick up updated "Called"/outcome columns
+      }
+    } catch (err) {
+      campaignStatusLine.textContent = 'Error checking status: ' + err.message;
+    }
+  }
+
+  campaignStartBtn.addEventListener('click', async () => {
+    const includeAlreadyCalled = document.getElementById('campaignIncludeCalled').checked;
+    campaignStartBtn.disabled = true;
+    try {
+      const res = await fetch('/admin/campaign/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ includeAlreadyCalled }),
+      });
+      const data = await res.json();
+      if (data.error) { alert('Error: ' + data.error); return; }
+      refreshCampaignStatus();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      campaignStartBtn.disabled = false;
+    }
+  });
+
+  campaignStopBtn.addEventListener('click', async () => {
+    await fetch('/admin/campaign/stop', { method: 'POST' });
+    refreshCampaignStatus();
+  });
+
+  refreshCampaignStatus();
+
   document.getElementById('importBtn').addEventListener('click', async () => {
     const fileInput = document.getElementById('importFile');
     const status = document.getElementById('importStatus');
@@ -912,6 +1073,13 @@
 
   providerTabButtons.forEach((btn) => {
     btn.addEventListener('click', () => switchTelProvider(btn.dataset.provider));
+  });
+
+  document.querySelectorAll('#settingsSubTabs button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#settingsSubTabs button').forEach((b) => b.classList.toggle('active', b === btn));
+      document.querySelectorAll('.settingsSubPanel').forEach((p) => p.classList.toggle('active', p.id === 'settingsSub-' + btn.dataset.subtab));
+    });
   });
 
   async function loadTelephonyConfig() {

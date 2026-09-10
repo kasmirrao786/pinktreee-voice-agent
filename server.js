@@ -10,6 +10,7 @@ import path from 'path';
 import * as XLSX from 'xlsx';
 import ffmpegPath from 'ffmpeg-static';
 import { spawn } from 'child_process';
+import crypto from 'crypto';
 
 // Converts whatever a TTS provider hands back (mp3, pcm, whatever) into raw
 // mu-law/8kHz - the exact format Twilio's Media Streams expect. Needed
@@ -242,6 +243,7 @@ const {
   TELNYX_API_KEY,
   TELNYX_CONNECTION_ID,
   TELNYX_PHONE_NUMBER,
+  TELNYX_PUBLIC_KEY,
   DEEPGRAM_API_KEY,
   OPENROUTER_API_KEY,
   OPENROUTER_MODEL = 'anthropic/claude-sonnet-4.5',
@@ -899,56 +901,136 @@ async function ensureGenericOpeningClip() {
 }
 
 const app = express();
+// Behind Railway's (or any) reverse proxy, req.ip is the proxy's address
+// unless this is set - needed for the per-IP rate limit below to actually
+// distinguish callers instead of limiting everyone as one bucket.
+app.set('trust proxy', true);
 app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
+// Captures the exact raw bytes of the request body alongside the parsed
+// JSON - Telnyx's webhook signature is computed over those exact raw
+// bytes, so re-serializing the parsed body wouldn't reliably match.
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.static('public'));
 
-// ---- 1. Outbound call trigger ----------------------------------------------
-// POST /call  { "to": "+15551234567", "forceCall": false }
-app.post('/call', async (req, res) => {
-  const { to, forceCall } = req.body;
-  if (!to) return res.status(400).json({ error: 'missing "to" number' });
+// ---- Per-IP rate limit on /call ---------------------------------------------
+// Simple in-memory sliding window - not meant to stop a determined attacker
+// distributing requests across many IPs, just to contain a runaway bug or
+// script that ends up blasting far more calls than intended. If this ever
+// runs as more than one instance, each instance tracks its own counts
+// independently (same caveat as the rest of this app's in-memory state).
+const CALL_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const CALL_RATE_LIMIT_MAX = 20; // per IP, per minute - generous for a human, tight for a bug
+const callRateLimitLog = new Map(); // ip -> recent request timestamps (ms)
 
-  if (await isOnDncList(to)) {
-    return res.status(403).json({ error: 'number is on the do-not-call list' });
+function isCallRateLimited(ip) {
+  const now = Date.now();
+  const recent = (callRateLimitLog.get(ip) || []).filter((t) => now - t < CALL_RATE_LIMIT_WINDOW_MS);
+  recent.push(now);
+  callRateLimitLog.set(ip, recent);
+  return recent.length > CALL_RATE_LIMIT_MAX;
+}
+
+// ---- Twilio webhook signature verification ---------------------------------
+// Without this, anyone who finds /voice or /call-status can POST forged
+// requests - fake "call answered" events, fake AnsweredBy values, etc.
+// Twilio signs every webhook request with the account's Auth Token; this
+// confirms a request actually came from Twilio before acting on it.
+function requireTwilioSignature(req, res, next) {
+  if (!telephonyConfig.twilioAuthToken) {
+    console.warn(`Twilio auth token not configured - skipping signature check on ${req.path}. Set it in Settings > Telephony.`);
+    return next();
   }
-  if (!isWithinCallingHours()) {
-    return res.status(403).json({
-      error: `outside allowed calling hours (${appConfig.callHoursStart}:00-${appConfig.callHoursEnd}:00 ${appConfig.callHoursTz})`,
+  const signature = req.headers['x-twilio-signature'];
+  const url = `https://${PUBLIC_HOSTNAME}${req.originalUrl}`;
+  const valid = twilio.validateRequest(telephonyConfig.twilioAuthToken, signature || '', url, req.body);
+  if (!valid) {
+    console.warn(`Rejected ${req.path}: invalid Twilio signature`);
+    return res.status(403).send('Invalid signature');
+  }
+  next();
+}
+
+// ---- Telnyx webhook signature verification ----------------------------------
+// Same reasoning as Twilio above, different mechanism: Telnyx signs with
+// Ed25519 over "{timestamp}|{raw body}", verified against the public key
+// from your Telnyx Mission Control Portal (account-level, set once as
+// TELNYX_PUBLIC_KEY - unlike the API key/connection ID, this isn't a
+// per-call-config credential, so it stays an env var rather than moving
+// into the admin panel).
+function verifyTelnyxSignature(req) {
+  if (!TELNYX_PUBLIC_KEY) {
+    console.warn('TELNYX_PUBLIC_KEY not configured - skipping signature check on /telnyx/webhook. Set it in .env (from the Mission Control Portal) to verify Telnyx webhooks are genuine.');
+    return true;
+  }
+  const signatureHeader = req.headers['telnyx-signature-ed25519'];
+  const timestampHeader = req.headers['telnyx-timestamp'];
+  if (!signatureHeader || !timestampHeader || !req.rawBody) return false;
+
+  // Reject anything older than 5 minutes - stops a captured request from
+  // being replayed later.
+  const timestamp = parseInt(timestampHeader, 10);
+  if (!timestamp || Math.abs(Date.now() / 1000 - timestamp) > 300) return false;
+
+  try {
+    const signedPayload = `${timestampHeader}|${req.rawBody.toString('utf-8')}`;
+    const publicKeyBytes = Buffer.from(TELNYX_PUBLIC_KEY, 'base64');
+    const keyObject = crypto.createPublicKey({
+      key: { kty: 'OKP', crv: 'Ed25519', x: publicKeyBytes.toString('base64url') },
+      format: 'jwk',
     });
+    return crypto.verify(null, Buffer.from(signedPayload), keyObject, Buffer.from(signatureHeader, 'base64'));
+  } catch (err) {
+    console.error('Telnyx signature verification error:', err.message);
+    return false;
   }
-  if (activeCallSids.size >= appConfig.maxConcurrentCalls) {
-    return res.status(429).json({ error: 'at max concurrent call capacity, try again shortly' });
-  }
+}
 
+// ---- Outbound call placement -------------------------------------------------
+// Shared by the manual /call endpoint and the auto-dialer below. Handles
+// provider credential checks and the actual dial - does NOT check DNC,
+// calling hours, or "already called" history, since the auto-dialer applies
+// those at queue-build/pop time slightly differently than the interactive
+// /call route does (no forceCall concept in an unattended queue).
+//
+// callsInFlight tracks every call from the moment it's dialed until it
+// fully ends (terminal status webhook), which is deliberately broader than
+// activeCallSids (added only once the media stream connects). A burst of
+// calls that are still ringing/still running AMD wouldn't show up in
+// activeCallSids yet, so gating concurrency on that alone could let more
+// than maxConcurrentCalls go out at once - callsInFlight is the accurate
+// count for that purpose.
+const callsInFlight = new Set();
+// If a terminal status webhook is ever lost (dropped connection, provider
+// hiccup), a call would stay in callsInFlight forever and slowly starve the
+// campaign's concurrency. Force-clear it after a generous ceiling - no real
+// call legitimately runs this long - and let the next pump backfill.
+const CALL_IN_FLIGHT_MAX_MS = 20 * 60 * 1000;
+function trackCallInFlight(sid) {
+  callsInFlight.add(sid);
+  setTimeout(() => {
+    if (callsInFlight.delete(sid)) {
+      console.warn(`Call ${sid} never received a terminal status webhook after 20min - clearing it from the in-flight count.`);
+      pumpCampaignQueue().catch((err) => console.error('Campaign pump error:', err.message));
+    }
+  }, CALL_IN_FLIGHT_MAX_MS);
+}
+
+async function placeCallToNumber(to) {
   const provider = telephonyConfig.provider || 'twilio';
 
   if (provider === 'twilio') {
     if (!telephonyConfig.twilioAccountSid || !telephonyConfig.twilioAuthToken) {
-      return res.status(500).json({ error: 'Twilio is selected as the voice provider but its Account SID / Auth Token are not set - add them in Settings > Telephony' });
+      return { ok: false, error: 'Twilio is selected as the voice provider but its Account SID / Auth Token are not set - add them in Settings > Telephony' };
     }
     if (!telephonyConfig.twilioPhoneNumber) {
-      return res.status(500).json({ error: 'no outbound caller ID configured - set it in Settings > Telephony' });
+      return { ok: false, error: 'no outbound caller ID configured - set it in Settings > Telephony' };
     }
   } else {
     if (!telephonyConfig.telnyxApiKey || !telephonyConfig.telnyxConnectionId) {
-      return res.status(500).json({ error: 'Telnyx is selected as the voice provider but its API Key / Connection ID are not set - add them in Settings > Telephony' });
+      return { ok: false, error: 'Telnyx is selected as the voice provider but its API Key / Connection ID are not set - add them in Settings > Telephony' };
     }
     if (!telephonyConfig.telnyxPhoneNumber) {
-      return res.status(500).json({ error: 'no outbound caller ID configured - set it in Settings > Telephony' });
-    }
-  }
-
-  // Already called this number before? Block unless the caller explicitly
-  // confirms with forceCall - surfaces last outcome so the admin can decide.
-  if (!forceCall) {
-    const history = getCallHistoryForNumber(to);
-    if (history.length > 0) {
-      return res.status(409).json({
-        error: 'already called this number before',
-        alreadyCalled: true,
-        history,
-      });
+      return { ok: false, error: 'no outbound caller ID configured - set it in Settings > Telephony' };
     }
   }
 
@@ -965,8 +1047,9 @@ app.post('/call', async (req, res) => {
         statusCallback: `https://${PUBLIC_HOSTNAME}/call-status`,
         statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
       });
+      trackCallInFlight(call.sid);
       logCallEvent({ event: 'call_initiated', callSid: call.sid, to, provider: 'twilio' });
-      res.json({ sid: call.sid, status: call.status });
+      return { ok: true, sid: call.sid, status: call.status };
     } else {
       // Telnyx's dial call returns before the call connects - everything
       // past this point (machine detection, opening the media stream,
@@ -980,13 +1063,186 @@ app.post('/call', async (req, res) => {
       });
       const callControlId = result.data.call_control_id;
       pendingTelnyxCalls.set(callControlId, { to });
+      trackCallInFlight(callControlId);
       logCallEvent({ event: 'call_initiated', callSid: callControlId, to, provider: 'telnyx' });
-      res.json({ sid: callControlId, status: 'queued' });
+      return { ok: true, sid: callControlId, status: 'queued' };
     }
   } catch (err) {
     console.error('Call creation failed:', err);
-    res.status(500).json({ error: err.message });
+    return { ok: false, error: err.message };
   }
+}
+
+// ---- 1. Outbound call trigger ----------------------------------------------
+// POST /call  { "to": "+15551234567", "forceCall": false }
+app.post('/call', async (req, res) => {
+  if (isCallRateLimited(req.ip)) {
+    return res.status(429).json({ error: `too many calls placed too quickly - limit is ${CALL_RATE_LIMIT_MAX} per minute per IP` });
+  }
+
+  const { to, forceCall } = req.body;
+  if (!to) return res.status(400).json({ error: 'missing "to" number' });
+
+  if (isOnDncList(to)) {
+    return res.status(403).json({ error: 'number is on the do-not-call list' });
+  }
+  if (!isWithinCallingHours()) {
+    return res.status(403).json({
+      error: `outside allowed calling hours (${appConfig.callHoursStart}:00-${appConfig.callHoursEnd}:00 ${appConfig.callHoursTz})`,
+    });
+  }
+  if (callsInFlight.size >= appConfig.maxConcurrentCalls) {
+    return res.status(429).json({ error: 'at max concurrent call capacity, try again shortly' });
+  }
+
+  // Already called this number before? Block unless the caller explicitly
+  // confirms with forceCall - surfaces last outcome so the admin can decide.
+  if (!forceCall) {
+    const history = getCallHistoryForNumber(to);
+    if (history.length > 0) {
+      return res.status(409).json({
+        error: 'already called this number before',
+        alreadyCalled: true,
+        history,
+      });
+    }
+  }
+
+  const result = await placeCallToNumber(to);
+  if (!result.ok) return res.status(500).json({ error: result.error });
+  res.json({ sid: result.sid, status: result.status });
+});
+
+// ---- Auto-dialer (campaign) -------------------------------------------------
+// Dials down a queue of contacts automatically, keeping up to
+// maxConcurrentCalls running at once - as soon as one call ends, the next
+// queued contact is dialed to backfill it. Single queue at a time (no
+// concept of multiple simultaneous campaigns); starting a new one while one
+// is active is rejected rather than merged, to avoid surprising interleaving.
+const CAMPAIGN_STATE_PATH = path.join(DATA_DIR, 'campaign_state.json');
+let campaign = {
+  active: false,
+  queue: [],           // phone numbers not yet dialed
+  dialedCount: 0,
+  skippedCount: 0,      // hit DNC, or the dial itself failed
+  startedAt: null,
+  finishedAt: null,
+};
+
+function saveCampaignState() {
+  try {
+    fsSync.writeFileSync(CAMPAIGN_STATE_PATH, JSON.stringify(campaign, null, 2));
+  } catch (err) {
+    console.error('Failed to save campaign state:', err.message);
+  }
+}
+
+function loadCampaignState() {
+  if (!fsSync.existsSync(CAMPAIGN_STATE_PATH)) return;
+  try {
+    campaign = { ...campaign, ...JSON.parse(fsSync.readFileSync(CAMPAIGN_STATE_PATH, 'utf-8')) };
+  } catch {
+    // corrupt/partial write - start clean rather than crash on boot
+  }
+  // A queue that survives a restart shouldn't silently keep dialing without
+  // anyone watching - require an explicit resume via /admin/campaign/start.
+  if (campaign.active && campaign.queue.length > 0) {
+    console.log(`Found ${campaign.queue.length} contact(s) left in a campaign queue from a previous run - it's paused; resume it from the Contacts tab.`);
+  }
+  campaign.active = false;
+}
+
+// Backfills the queue up to maxConcurrentCalls whenever there's room -
+// called right after starting a campaign, and again every time a call ends
+// (from the Twilio/Telnyx webhook handlers below) plus on a periodic timer
+// as a safety net in case a webhook is ever missed.
+let pumpInProgress = false;
+async function pumpCampaignQueue() {
+  if (!campaign.active || pumpInProgress) return;
+  pumpInProgress = true;
+  try {
+    if (!isWithinCallingHours()) return; // periodic pump will retry once back in hours
+
+    while (campaign.queue.length > 0 && callsInFlight.size < appConfig.maxConcurrentCalls) {
+      const to = campaign.queue.shift();
+      if (isOnDncList(to)) {
+        campaign.skippedCount++;
+        continue;
+      }
+      const result = await placeCallToNumber(to);
+      if (result.ok) {
+        campaign.dialedCount++;
+      } else {
+        campaign.skippedCount++;
+        console.error(`Campaign dial failed for ${to}:`, result.error);
+      }
+    }
+
+    if (campaign.queue.length === 0 && callsInFlight.size === 0 && campaign.active) {
+      campaign.active = false;
+      campaign.finishedAt = new Date().toISOString();
+      console.log(`Campaign finished: ${campaign.dialedCount} dialed, ${campaign.skippedCount} skipped.`);
+    }
+  } finally {
+    pumpInProgress = false;
+    saveCampaignState();
+  }
+}
+
+setInterval(() => {
+  pumpCampaignQueue().catch((err) => console.error('Campaign pump error:', err.message));
+}, 15000);
+
+// POST /admin/campaign/start  { includeAlreadyCalled: false }
+app.post('/admin/campaign/start', async (req, res) => {
+  if (campaign.active) {
+    return res.status(409).json({ error: 'a campaign is already running - stop it first' });
+  }
+  const includeAlreadyCalled = !!req.body?.includeAlreadyCalled;
+  const contacts = readContacts();
+  const queue = contacts
+    .map((c) => c.phone)
+    .filter(Boolean)
+    .filter((phone) => !isOnDncList(phone))
+    .filter((phone) => includeAlreadyCalled || getCallHistoryForNumber(phone).length === 0);
+
+  if (queue.length === 0) {
+    return res.status(400).json({ error: 'no eligible contacts to call (empty list, all on DNC, or all already called - try includeAlreadyCalled)' });
+  }
+
+  campaign = {
+    active: true,
+    queue,
+    dialedCount: 0,
+    skippedCount: 0,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+  };
+  saveCampaignState();
+  pumpCampaignQueue().catch((err) => console.error('Campaign pump error:', err.message));
+  res.json({ started: true, queued: queue.length });
+});
+
+app.post('/admin/campaign/stop', (req, res) => {
+  campaign.active = false;
+  campaign.finishedAt = new Date().toISOString();
+  saveCampaignState();
+  // Calls already in flight are left to finish naturally - this only stops
+  // new ones from being dialed off the queue.
+  res.json({ stopped: true, remainingInQueue: campaign.queue.length, inFlight: callsInFlight.size });
+});
+
+app.get('/admin/campaign/status', (req, res) => {
+  res.json({
+    active: campaign.active,
+    queued: campaign.queue.length,
+    inFlight: callsInFlight.size,
+    maxConcurrentCalls: appConfig.maxConcurrentCalls,
+    dialedCount: campaign.dialedCount,
+    skippedCount: campaign.skippedCount,
+    startedAt: campaign.startedAt,
+    finishedAt: campaign.finishedAt,
+  });
 });
 
 // ---- Telnyx Call Control webhooks -------------------------------------------
@@ -997,6 +1253,10 @@ app.post('/call', async (req, res) => {
 // immediately - Telnyx retries on anything else - and do the actual work
 // afterward.
 app.post('/telnyx/webhook', async (req, res) => {
+  if (!verifyTelnyxSignature(req)) {
+    console.warn('Rejected /telnyx/webhook: invalid Telnyx signature');
+    return res.status(403).send('Invalid signature');
+  }
   res.sendStatus(200);
 
   const eventType = req.body?.data?.event_type;
@@ -1052,6 +1312,8 @@ app.post('/telnyx/webhook', async (req, res) => {
         clearTimeout(pendingTelnyxCalls.get(callControlId)?.amdFallbackTimer);
         pendingTelnyxCalls.delete(callControlId);
         activeCallSids.delete(callControlId);
+        callsInFlight.delete(callControlId);
+        pumpCampaignQueue().catch((err) => console.error('Campaign pump error:', err.message));
         break;
     }
   } catch (err) {
@@ -1672,7 +1934,9 @@ app.get('/dnc', (req, res) => {
 });
 
 // ---- Call status webhook (lifecycle events: ringing, answered, completed) --
-app.post('/call-status', (req, res) => {
+const TWILIO_TERMINAL_STATUSES = ['completed', 'busy', 'no-answer', 'failed', 'canceled'];
+
+app.post('/call-status', requireTwilioSignature, (req, res) => {
   const { CallSid, CallStatus, CallDuration, AnsweredBy } = req.body;
   logCallEvent({
     event: 'status_update',
@@ -1681,6 +1945,10 @@ app.post('/call-status', (req, res) => {
     durationSeconds: CallDuration ? Number(CallDuration) : undefined,
     answeredBy: AnsweredBy,
   });
+  if (TWILIO_TERMINAL_STATUSES.includes(CallStatus)) {
+    callsInFlight.delete(CallSid);
+    pumpCampaignQueue().catch((err) => console.error('Campaign pump error:', err.message));
+  }
   res.sendStatus(200);
 });
 
@@ -1695,7 +1963,7 @@ app.get('/logs', (req, res) => {
 });
 
 // ---- 2. TwiML: tell Twilio to open a Media Stream to our WS server ---------
-app.post('/voice', (req, res) => {
+app.post('/voice', requireTwilioSignature, (req, res) => {
   const { CallSid, AnsweredBy } = req.body;
   const twiml = new twilio.twiml.VoiceResponse();
 
@@ -1767,6 +2035,7 @@ loadOpeningTemplate();
 loadTtsConfig();
 loadAppConfig();
 loadTelephonyConfig();
+loadCampaignState();
 
 // Voicemail audio is a nice-to-have, not core to the service - a bad
 // AURA_MODEL or a transient Deepgram error shouldn't crash-loop the whole

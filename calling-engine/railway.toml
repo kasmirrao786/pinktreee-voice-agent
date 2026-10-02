@@ -1,0 +1,17 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+# Keep this at 1. Campaign queues, the in-flight-call concurrency cap, and
+# the pendingOutboundCalls context map are all in-process memory, not
+# shared across replicas - a second replica would run its own independent
+# campaign queues (silently doubling effective concurrency) and could miss
+# the pending context for a call that started on the other replica. Scaling
+# this service horizontally needs that state moved into Postgres/Redis
+# first - not a config change, an architecture change.
+numReplicas = 1

@@ -1,0 +1,1411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PinkTreeE — Voice Agent Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,500&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #F6F4EF;
+    --surface: #FFFFFF;
+    --surface-sunk: #EFEDE5;
+    --ink: #14130F;
+    --ink-soft: #4A473E;
+    --ink-mute: #8A8678;
+    --line: #DFDBCE;
+    --line-strong: #C5C0AE;
+    --sidebar: #14130F;
+    --sidebar-text: #ECE9DE;
+    --sidebar-dim: #8B8778;
+    --sidebar-line: #2A2822;
+    --good-bg: #E3EEE2;
+    --good-ink: #2E5C3E;
+    --bad-bg: #F3E4DD;
+    --bad-ink: #8A3A25;
+    --radius: 3px;
+    --serif: "Fraunces", Georgia, serif;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--ink); color: var(--bg); }
+
+  a { color: inherit; }
+  button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+
+  .shell { display: flex; min-height: 100vh; }
+
+  .sidebar {
+    width: 216px;
+    flex-shrink: 0;
+    background: var(--sidebar);
+    color: var(--sidebar-text);
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+  .brand { padding: 22px 18px 16px; border-bottom: 1px solid var(--sidebar-line); }
+  .brand .wordmark { font-family: var(--serif); font-weight: 600; font-size: 19px; letter-spacing: 0.01em; color: #fff; }
+  .brand .tagline { margin-top: 4px; font-size: 10.5px; color: var(--sidebar-dim); line-height: 1.4; }
+
+  nav.navlist { flex: 1; padding: 10px 0; overflow-y: auto; }
+  .navSection { margin-bottom: 4px; }
+  .navSectionLabel {
+    padding: 12px 18px 6px; font-size: 10px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--sidebar-dim); opacity: 0.6;
+  }
+  .tab {
+    display: flex; align-items: center; gap: 9px; padding: 8px 18px; font-size: 12.5px;
+    color: var(--sidebar-dim); cursor: pointer; border-left: 2px solid transparent;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease; white-space: nowrap;
+  }
+  .tab .dot { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0; flex-shrink: 0; }
+  .tab:hover { color: var(--sidebar-text); background: rgba(255,255,255,0.03); }
+  .tab.active { color: #fff; border-left-color: #fff; background: rgba(255,255,255,0.05); }
+  .tab.active .dot { opacity: 1; }
+
+  .sidebar-foot { padding: 14px 18px 18px; border-top: 1px solid var(--sidebar-line); font-size: 10.5px; color: var(--sidebar-dim); line-height: 1.6; }
+  .sidebar-foot .row { display: flex; justify-content: space-between; gap: 8px; }
+  .sidebar-foot .live { color: #9FD9AE; }
+  .sidebar-foot .pulse {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #9FD9AE;
+    margin-right: 5px; position: relative; top: -1px; animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
+
+  main.content { flex: 1; min-width: 0; padding: 30px 40px 60px; max-width: 980px; }
+
+  .content-head { margin-bottom: 22px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .content-head h1 { font-family: var(--serif); font-weight: 500; font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .content-head .sub { color: var(--ink-mute); font-size: 12px; }
+
+  .panel { display: none; }
+  .panel.active { display: block; animation: fade .18s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+
+  h3.sectionTitle { font-family: var(--serif); font-style: italic; font-weight: 500; font-size: 14.5px; color: var(--ink); margin: 26px 0 10px; }
+  h3.sectionTitle:first-child { margin-top: 0; }
+
+  #voiceChat, #textChat { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; height: 380px; overflow-y: auto; margin-bottom: 14px; background: var(--surface); }
+  .msg { margin: 0 0 14px; line-height: 1.55; font-size: 13px; max-width: 88%; }
+  .msg:last-child { margin-bottom: 0; }
+  .msg.agent { font-family: var(--serif); font-size: 14.5px; color: var(--ink); }
+  .msg.agent b { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; color: var(--ink-mute); font-weight: 500; margin-bottom: 3px; }
+  .msg.caller { margin-left: auto; text-align: right; color: var(--ink-soft); }
+  .msg.caller b { display: block; font-size: 10px; letter-spacing: 0.04em; color: var(--ink-mute); font-weight: 500; margin-bottom: 3px; }
+  .msg.status { text-align: center; max-width: 100%; }
+  .status { color: var(--ink-mute); font-style: normal; font-size: 11.5px; }
+
+  #recordBtn {
+    width: 100%; padding: 16px; font-size: 13px; font-weight: 500; letter-spacing: 0.02em;
+    border-radius: var(--radius); border: 1px solid var(--ink); cursor: pointer;
+    background: var(--ink); color: #fff; transition: background .12s ease, transform .05s ease;
+  }
+  #recordBtn:active { transform: scale(0.997); }
+  #recordBtn.recording { background: var(--bad-ink); border-color: var(--bad-ink); animation: recpulse 1.1s ease-in-out infinite; }
+  @keyframes recpulse { 0%,100% { box-shadow: 0 0 0 0 rgba(138,58,37,0.35); } 50% { box-shadow: 0 0 0 7px rgba(138,58,37,0); } }
+  #recordBtn:disabled { background: var(--line-strong); border-color: var(--line-strong); cursor: not-allowed; }
+  .hint { text-align: center; color: var(--ink-mute); font-size: 11px; margin-top: 9px; }
+
+  #textForm { display: flex; gap: 8px; }
+  #textInput { flex: 1; padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  #textInput:focus { outline: none; border-color: var(--ink); }
+  #textForm button { padding: 11px 18px; cursor: pointer; border: 1px solid var(--ink); background: var(--ink); color: #fff; border-radius: var(--radius); font-weight: 500; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--ink-mute); font-weight: 500; font-size: 10.5px; letter-spacing: 0.03em; }
+  tbody tr:hover { background: var(--surface-sunk); }
+
+  .outcome { display: inline-block; padding: 2px 7px; border-radius: 20px; font-size: 10.5px; background: var(--surface-sunk); color: var(--ink-soft); }
+  .outcome.booked_demo { background: var(--good-bg); color: var(--good-ink); }
+  .outcome.do_not_call, .outcome.not_interested { background: var(--bad-bg); color: var(--bad-ink); }
+
+  #dncForm { display: flex; gap: 8px; margin-bottom: 18px; }
+  #dncForm input { padding: 9px 11px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  #dncForm input:focus { outline: none; border-color: var(--ink); }
+  #dncForm input[name=to] { flex: 1; }
+  #dncForm input[name=reason] { flex: 2; }
+  #dncForm button { padding: 9px 16px; border: 1px solid var(--ink); background: var(--ink); color: #fff; border-radius: var(--radius); cursor: pointer; font-weight: 500; }
+
+  .refresh, .clear-link { font-size: 11px; color: var(--ink-mute); cursor: pointer; text-decoration: none; border-bottom: 1px dotted var(--ink-mute); }
+  .refresh { float: right; }
+  .clear-link { color: var(--bad-ink); border-bottom-color: var(--bad-ink); margin-left: 12px; }
+  .refresh:hover, .clear-link:hover { color: var(--ink); border-bottom-color: var(--ink); }
+
+  .empty { color: var(--ink-mute); font-size: 12px; padding: 22px 0; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius); margin-top: 8px; }
+
+  #openingEditor, #scriptEditor {
+    width: 100%; font-family: var(--mono); font-size: 12px; padding: 12px; border: 1px solid var(--line);
+    border-radius: var(--radius); resize: vertical; background: var(--surface); line-height: 1.6;
+  }
+  #openingEditor { height: 90px; }
+  #scriptEditor { height: 380px; }
+  #openingEditor:focus, #scriptEditor:focus { outline: none; border-color: var(--ink); }
+
+  .scriptActions { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+  .scriptActions button { padding: 8px 15px; font-size: 12px; cursor: pointer; border-radius: var(--radius); font-weight: 500; }
+  #scriptSaveBtn, #openingSaveBtn, #ttsSaveBtn, #cfgSaveBtn, #telSaveBtn { background: var(--ink); color: #fff; border: 1px solid var(--ink); }
+  #scriptResetBtn, #openingResetBtn, #ttsResetBtn, #cfgResetBtn, #telResetBtn { background: none; border: 1px solid var(--line-strong); color: var(--ink-soft); }
+  #scriptStatus, #openingStatus, #ttsStatus, #cfgStatus, #telStatus { font-size: 11px; color: var(--ink-mute); }
+
+  .fieldnote { font-size: 11px; color: var(--ink-mute); margin: 8px 0 4px; line-height: 1.6; }
+  .fieldnote code { background: var(--surface-sunk); padding: 1px 5px; border-radius: 2px; font-size: 10.5px; }
+  .fieldnote.warn { color: var(--bad-ink); }
+
+  #importRow { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+  #importFile { border: 1px solid var(--line); border-radius: var(--radius); padding: 7px; background: var(--surface); font-size: 12px; }
+  #importRow button { padding: 8px 15px; font-size: 12px; cursor: pointer; border-radius: var(--radius); background: var(--ink); color: #fff; border: 1px solid var(--ink); font-weight: 500; }
+  .call-btn { padding: 4px 11px; font-size: 11px; cursor: pointer; background: transparent; color: var(--ink); border: 1px solid var(--ink); border-radius: 20px; font-weight: 500; }
+  .call-btn:hover { background: var(--ink); color: #fff; }
+  .call-btn:disabled { background: var(--line); color: var(--ink-mute); border-color: var(--line); cursor: not-allowed; }
+
+  .statGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 8px; }
+  .statCard { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 12px; background: var(--surface); }
+  .statCard .num { font-family: var(--serif); font-size: 24px; font-weight: 500; color: var(--ink); line-height: 1; }
+  .statCard .label { font-size: 10.5px; color: var(--ink-mute); margin-top: 7px; letter-spacing: 0.01em; }
+
+  .barRow { display: flex; align-items: center; gap: 10px; margin: 7px 0; font-size: 11.5px; }
+  .barRow .barLabel { width: 130px; flex-shrink: 0; color: var(--ink-soft); }
+  .barRow .barTrack { flex: 1; background: var(--surface-sunk); border-radius: 2px; overflow: hidden; height: 14px; }
+  .barRow .barFill { height: 100%; background: var(--ink); }
+  .barRow .barCount { width: 30px; text-align: right; color: var(--ink-mute); }
+
+  select, input[type=text], input[type=number], input[type=password] { padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  select:focus, input:focus { outline: none; border-color: var(--ink); }
+  label { font-size: 11px; color: var(--ink-soft); }
+  label input, label select { display: block; width: 100%; margin-top: 5px; }
+
+  .providerTabs { display: flex; gap: 6px; margin-bottom: 12px; }
+  .providerTabs button { padding: 7px 14px; font-size: 11.5px; border-radius: 20px; cursor: pointer; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-soft); font-weight: 500; }
+  .providerTabs button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  .settingsTabs { display: flex; gap: 4px; margin-bottom: 22px; border-bottom: 1px solid var(--line); padding-bottom: 0; }
+  .settingsTabs button { padding: 9px 4px; margin-right: 18px; font-size: 12.5px; cursor: pointer; border: none; border-bottom: 2px solid transparent; background: none; color: var(--ink-mute); font-weight: 500; }
+  .settingsTabs button.active { color: var(--ink); border-bottom-color: var(--ink); }
+  .settingsSubPanel { display: none; }
+  .settingsSubPanel.active { display: block; }
+  .providerFields { display: none; }
+  .providerFields.active { display: grid; }
+
+  .badge-unbuilt {
+    display: inline-block; font-size: 9.5px; letter-spacing: 0.03em; text-transform: uppercase;
+    background: var(--bad-bg); color: var(--bad-ink); padding: 2px 7px; border-radius: 20px; margin-left: 6px; vertical-align: middle;
+  }
+
+  #bulkRunBtn { padding: 9px 17px; border-radius: var(--radius); background: var(--ink); color: #fff; border: 1px solid var(--ink); cursor: pointer; font-weight: 500; font-size: 12px; }
+  #bulkRepeats { width: 54px; padding: 7px; border: 1px solid var(--line); border-radius: var(--radius); }
+
+  audio { filter: none; }
+
+
+  @media (max-width: 760px) {
+    .shell { flex-direction: column; }
+    .sidebar { width: 100%; height: auto; position: relative; flex-direction: row; align-items: center; }
+    .brand { border-bottom: none; border-right: 1px solid var(--sidebar-line); padding: 14px 16px; }
+    nav.navlist { display: flex; overflow-x: auto; padding: 0; }
+    .navSection { display: contents; }
+    .navSectionLabel { display: none; }
+    .tab { border-left: none; border-bottom: 2px solid transparent; padding: 14px 12px; }
+    .tab.active { border-left: none; border-bottom-color: #fff; }
+    .sidebar-foot { display: none; }
+    main.content { padding: 22px 18px 40px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="shell" id="appShell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="wordmark">PinkTreeE</div>
+        <div class="tagline">Voice agent console — test calls, review activity, nothing here dials a real number from this screen alone.</div>
+      </div>
+      <nav class="navlist">
+        <div class="navSection">
+          <div class="navSectionLabel">Test</div>
+          <div class="tab active" data-tab="voice" data-title="Voice test" data-sub="Talk to the agent live through your microphone.">
+            <span class="dot"></span>Voice test
+          </div>
+          <div class="tab" data-tab="text" data-title="Text test" data-sub="Type turns back and forth with the agent instead of speaking.">
+            <span class="dot"></span>Text test
+          </div>
+          <div class="tab" data-tab="bulktest" data-title="Bulk test" data-sub="Run canned caller scripts through the real pipeline, no phone call.">
+            <span class="dot"></span>Bulk test
+          </div>
+        </div>
+
+        <div class="navSection">
+          <div class="navSectionLabel">Operate</div>
+          <div class="tab" data-tab="contacts" data-title="Contacts" data-sub="Import a list and place calls to individual contacts.">
+            <span class="dot"></span>Contacts
+          </div>
+          <div class="tab" data-tab="logs" data-title="Call logs" data-sub="Every call event, in order.">
+            <span class="dot"></span>Call logs
+          </div>
+          <div class="tab" data-tab="dnc" data-title="Do-not-call" data-sub="Numbers the agent will never dial.">
+            <span class="dot"></span>Do-not-call
+          </div>
+        </div>
+
+        <div class="navSection">
+          <div class="navSectionLabel">Insights</div>
+          <div class="tab" data-tab="analytics" data-title="Analytics" data-sub="Outcomes and call volume over time.">
+            <span class="dot"></span>Analytics
+          </div>
+          <div class="tab" data-tab="costs" data-title="Costs" data-sub="Estimated spend by provider and model.">
+            <span class="dot"></span>Costs
+          </div>
+        </div>
+
+        <div class="navSection">
+          <div class="navSectionLabel">Configure</div>
+          <div class="tab" data-tab="script" data-title="Script" data-sub="Edit the opening line and the full call script the agent follows.">
+            <span class="dot"></span>Script
+          </div>
+          <div class="tab" data-tab="settings" data-title="Settings" data-sub="Telephony, TTS provider, and general call configuration.">
+            <span class="dot"></span>Settings
+          </div>
+        </div>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="row"><span><span class="pulse"></span>console</span><span class="live">active</span></div>
+        <div class="row"><span>calls placed here</span><span>never</span></div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="content-head">
+        <div>
+          <h1 id="pageTitle">Voice test</h1>
+          <div class="sub" id="pageSub">Talk to the agent live through your microphone.</div>
+        </div>
+      </div>
+
+      <div class="panel active" id="panel-voice">
+        <div id="voiceIdle" class="empty" style="padding: 40px 0; text-align:center;">
+          <div style="margin-bottom:14px; color: var(--ink-mute); font-size:12.5px;">Nothing is running yet — starting this uses a real LLM + TTS request, same as it would with a caller.</div>
+          <button id="voiceStartBtn" style="padding: 10px 20px; border-radius: var(--radius); background: var(--ink); color:#fff; border:1px solid var(--ink); cursor:pointer; font-weight:500; font-size:13px;">Start test call</button>
+        </div>
+        <div id="voiceActive" style="display:none;">
+          <div id="voiceChat"></div>
+          <button id="recordBtn">Hold to talk</button>
+          <div class="hint">Press and hold, speak your reply, release when done.</div>
+          <button id="voiceEndBtn" style="margin-top:10px; background:none; border:1px solid var(--line-strong); color:var(--ink-mute); padding:7px 13px; border-radius:var(--radius); cursor:pointer; font-size:11px;">End test call</button>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-text">
+        <div id="textIdle" class="empty" style="padding: 40px 0; text-align:center;">
+          <div style="margin-bottom:14px; color: var(--ink-mute); font-size:12.5px;">Nothing is running yet — starting this uses a real LLM request, same as it would with a caller.</div>
+          <button id="textStartBtn" style="padding: 10px 20px; border-radius: var(--radius); background: var(--ink); color:#fff; border:1px solid var(--ink); cursor:pointer; font-weight:500; font-size:13px;">Start test chat</button>
+        </div>
+        <div id="textActive" style="display:none;">
+          <div id="textChat"></div>
+          <form id="textForm">
+            <input id="textInput" autocomplete="off" placeholder="Type your reply as the callee..." />
+            <button type="submit">Send</button>
+          </form>
+          <button id="textEndBtn" type="button" style="margin-top:10px; background:none; border:1px solid var(--line-strong); color:var(--ink-mute); padding:7px 13px; border-radius:var(--radius); cursor:pointer; font-size:11px;">End test chat</button>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-script">
+        <h3 class="sectionTitle">Opening line — skips the LLM entirely, spoken instantly</h3>
+        <textarea id="openingEditor" spellcheck="false"></textarea>
+        <div class="scriptActions">
+          <button id="openingSaveBtn">Save</button>
+          <button id="openingResetBtn" type="button">Reset to default</button>
+          <span id="openingStatus"></span>
+        </div>
+        <div class="fieldnote">
+          <code>{company}</code> is pulled from the matching contact, if any. <code>[[...{company}...]]</code> is a whole clause, dropped entirely if no company is known for this call.
+        </div>
+
+        <h3 class="sectionTitle">Full call script</h3>
+        <textarea id="scriptEditor" spellcheck="false"></textarea>
+        <div class="scriptActions">
+          <button id="scriptSaveBtn">Save</button>
+          <button id="scriptResetBtn" type="button">Reset to default</button>
+          <span id="scriptStatus"></span>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-contacts">
+        <div id="campaignBox" style="border:1px solid var(--line); border-radius: var(--radius); padding:14px 16px; margin-bottom:18px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+            <div>
+              <div style="font-weight:500; font-size:13px;">Auto-dialer</div>
+              <div id="campaignStatusLine" style="font-size:11.5px; color:var(--ink-mute); margin-top:2px;">Idle.</div>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <label style="font-size:11px; color:var(--ink-mute); display:flex; align-items:center; gap:5px;">
+                <input type="checkbox" id="campaignIncludeCalled" style="margin:0;" />Include already-called
+              </label>
+              <button id="campaignStartBtn" style="padding: 8px 16px; border-radius: var(--radius); background: var(--ink); color:#fff; border:1px solid var(--ink); cursor:pointer; font-weight:500; font-size:12px;">Start campaign</button>
+              <button id="campaignStopBtn" style="display:none; padding: 8px 16px; border-radius: var(--radius); background:none; border:1px solid var(--bad-ink); color:var(--bad-ink); cursor:pointer; font-weight:500; font-size:12px;">Stop</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="importRow">
+          <input type="file" id="importFile" accept=".csv,.xlsx,.xls" />
+          <button id="importBtn">Import</button>
+          <span id="importStatus" style="font-size:11px; color:var(--ink-mute);"></span>
+        </div>
+        <span class="refresh" onclick="loadContacts()">refresh</span>
+        <span class="clear-link" onclick="clearContacts()">clear all</span>
+        <table id="contactsTable">
+          <thead><tr><th>Phone</th><th>Name</th><th>Company</th><th>Called</th><th>Last outcome</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="contactsEmpty" style="display:none;">No contacts imported yet. CSV/XLSX needs a phone/number column.</div>
+      </div>
+
+      <div class="panel" id="panel-logs">
+        <span class="refresh" onclick="loadLogs()">refresh</span>
+        <table id="logsTable">
+          <thead><tr><th>Time</th><th>Event</th><th>To</th><th>Outcome</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="logsEmpty" style="display:none;">No call events yet.</div>
+      </div>
+
+      <div class="panel" id="panel-dnc">
+        <form id="dncForm">
+          <input name="to" placeholder="+15551234567" required />
+          <input name="reason" placeholder="reason (optional)" />
+          <button type="submit">Add</button>
+        </form>
+        <span class="refresh" onclick="loadDnc()">refresh</span>
+        <table id="dncTable">
+          <thead><tr><th>Number</th><th>Reason</th><th>Added</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="dncEmpty" style="display:none;">No numbers on the list yet.</div>
+      </div>
+
+      <div class="panel" id="panel-analytics">
+        <span class="refresh" onclick="loadAnalytics()">refresh</span>
+        <div class="statGrid" id="statGrid"></div>
+        <h3 class="sectionTitle">Outcomes</h3>
+        <div id="outcomeBars"></div>
+        <h3 class="sectionTitle">Calls per day (last 14 days)</h3>
+        <div id="dayBars"></div>
+      </div>
+
+      <div class="panel" id="panel-settings">
+        <div class="settingsTabs" id="settingsSubTabs">
+          <button type="button" data-subtab="telephony" class="active">Telephony</button>
+          <button type="button" data-subtab="tts">TTS provider</button>
+          <button type="button" data-subtab="general">General</button>
+        </div>
+
+        <div class="settingsSubPanel active" id="settingsSub-telephony">
+        <div class="fieldnote" style="margin-top:0;">
+          Pick which provider places your outbound calls, and enter its
+          credentials here instead of an environment variable — change
+          providers or rotate a credential without redeploying.
+        </div>
+        <div class="providerTabs">
+          <button type="button" data-provider="twilio" class="active">Twilio</button>
+          <button type="button" data-provider="telnyx">Telnyx</button>
+        </div>
+
+        <div class="providerFields active" id="telFields-twilio" style="grid-template-columns: 1fr 1fr; gap:12px;">
+          <label>Account SID
+            <input id="telTwilioSid" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+          </label>
+          <label>Auth Token
+            <input id="telTwilioToken" type="password" placeholder="••••••••••••••••" />
+          </label>
+          <label style="grid-column: 1 / -1;">Caller ID (from number)
+            <input id="telTwilioNumber" placeholder="+15551234567" />
+          </label>
+        </div>
+
+        <div class="providerFields" id="telFields-telnyx" style="grid-template-columns: 1fr 1fr; gap:12px;">
+          <label>API Key
+            <input id="telTelnyxKey" type="password" placeholder="KEYxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+          </label>
+          <label>Connection ID
+            <input id="telTelnyxConnectionId" placeholder="1234567890" />
+          </label>
+          <label style="grid-column: 1 / -1;">Caller ID (from number)
+            <input id="telTelnyxNumber" placeholder="+15551234567" />
+          </label>
+        </div>
+
+        <div class="fieldnote" id="telUnbuiltNote" style="display:none;">
+          Telnyx calls route through Telnyx's Call Control API and webhooks
+          instead of Twilio's synchronous TwiML flow. Make sure this
+          server's <code>PUBLIC_HOSTNAME</code> is reachable from the
+          internet (same requirement as Twilio) so Telnyx can reach
+          <code>/telnyx/webhook</code> and open the media stream.
+        </div>
+
+        <div class="scriptActions">
+          <button id="telSaveBtn">Save</button>
+          <button id="telResetBtn" type="button">Clear</button>
+          <span id="telStatus"></span>
+        </div>
+        </div>
+
+        <div class="settingsSubPanel" id="settingsSub-tts">
+        <div class="fieldnote" style="margin-top:0;">
+          Only affects the per-sentence speech during a live conversation — the cached clips (opening line, backchannel, fallback, opt-out) always use Deepgram Aura regardless of this setting, since their cost is one-time either way.
+        </div>
+        <div style="display:flex; gap:8px; margin: 10px 0 8px; flex-wrap:wrap;">
+          <select id="ttsProvider">
+            <option value="deepgram">Deepgram (Aura)</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="self_hosted">Self-hosted (Kokoro-FastAPI or similar)</option>
+          </select>
+          <input id="ttsModel" placeholder="model id" style="flex:1; min-width:180px;" />
+          <input id="ttsVoice" placeholder="voice (optional)" style="width:140px;" />
+        </div>
+        <div id="ttsBaseUrlRow" style="display:none; margin-bottom:8px;">
+          <input id="ttsBaseUrl" placeholder="http://your-kokoro-service:8880 (internal Coolify URL is fastest)" style="width:100%;" />
+        </div>
+        <div class="scriptActions">
+          <button id="ttsSaveBtn">Save</button>
+          <button id="ttsResetBtn" type="button">Reset to default</button>
+          <span id="ttsStatus"></span>
+        </div>
+        <div class="fieldnote">
+          Deepgram: model <code>aura-asteria-en</code>, no voice needed. OpenRouter: model <code>hexgrad/kokoro-82m</code>, voice e.g. <code>af_bella</code>. Self-hosted: model <code>kokoro</code>, base URL pointing at your deployed Kokoro-FastAPI service — use the internal/private network address if it's on the same host as this app, it's meaningfully faster than routing out over the public internet and back.
+          <br/>OpenRouter TTS hasn't been confirmed to support true low-latency streaming the way Aura does — the first sentence of a reply may take a bit longer to start playing. Test it in Voice Test before trusting it on real calls.
+        </div>
+        </div>
+
+        <div class="settingsSubPanel" id="settingsSub-general">
+        <div class="fieldnote" style="margin-top:0;">
+          Everything below is operational config, not credentials.
+        </div>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin: 10px 0 10px;">
+          <label>Max concurrent calls
+            <input id="cfgMaxConcurrent" type="number" min="1" />
+          </label>
+          <label>Calling hours timezone
+            <input id="cfgCallHoursTz" placeholder="America/New_York" />
+          </label>
+          <label>Calling hours (24h, start–end)
+            <div style="display:flex; gap:6px; margin-top:5px;">
+              <input id="cfgCallHoursStart" type="number" min="0" max="23" style="width:100%;" />
+              <input id="cfgCallHoursEnd" type="number" min="0" max="23" style="width:100%;" />
+            </div>
+          </label>
+          <label>Conversation LLM model
+            <input id="cfgLlmModel" placeholder="anthropic/claude-sonnet-4.5" />
+          </label>
+          <label>Classifier model (cheap, post-call only)
+            <input id="cfgClassifierModel" placeholder="anthropic/claude-haiku-4.5" />
+          </label>
+          <label>Turn-detection wait (ms)
+            <input id="cfgUtteranceEndMs" type="number" min="200" />
+          </label>
+        </div>
+        <div class="scriptActions">
+          <button id="cfgSaveBtn">Save</button>
+          <button id="cfgResetBtn" type="button">Reset to default</button>
+          <span id="cfgStatus"></span>
+        </div>
+
+        <h3 class="sectionTitle">Human transfer</h3>
+        <div class="fieldnote" style="margin-top:0;">
+          "Talk to a human/person/representative" always triggers a transfer once a number is set below - these are additional phrases specific to your script (comma-separated), on top of that built-in set.
+        </div>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin: 10px 0 10px;">
+          <label>Transfer number
+            <input id="cfgTransferNumber" placeholder="+15551234567" />
+          </label>
+          <label>Extra trigger phrases
+            <input id="cfgTransferKeywords" placeholder="talk to sales, escalate this" />
+          </label>
+        </div>
+        <div class="scriptActions">
+          <button id="transferSaveBtn">Save</button>
+          <span id="transferStatus"></span>
+        </div>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-costs">
+        <span class="refresh" onclick="loadCosts()">refresh</span>
+        <div class="statGrid" id="costStatGrid"></div>
+        <h3 class="sectionTitle">By provider / model</h3>
+        <table id="costTable">
+          <thead><tr><th>Type</th><th>Provider</th><th>Model</th><th>Requests</th><th>Avg latency</th><th>Total cost</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <h3 class="sectionTitle">Recent requests</h3>
+        <table id="requestLogTable">
+          <thead><tr><th>Time</th><th>Type</th><th>Model</th><th>Latency</th><th>Cost</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="costsEmpty" style="display:none;">No requests logged yet.</div>
+      </div>
+
+      <div class="panel" id="panel-bulktest">
+        <div class="fieldnote" style="margin-top:0;">
+          Runs a handful of canned caller scripts (not interested, full qualify-to-book, gatekeeper, pricing objection, opt-out) through the real LLM+TTS pipeline — no phone call, no Twilio. Costs real API money for each run, but nothing close to a real call. Results are kept separate from your real-call Analytics/Costs data.
+        </div>
+        <div style="display:flex; gap:10px; align-items:center; margin:14px 0;">
+          <label style="display:flex; align-items:center; gap:6px;">Repeats <input id="bulkRepeats" type="number" value="1" min="1" max="5" /></label>
+          <button id="bulkRunBtn">Run bulk test</button>
+          <span id="bulkStatus" style="font-size:11px; color:var(--ink-mute);"></span>
+        </div>
+
+        <div id="bulkLatestResult"></div>
+
+        <h3 class="sectionTitle">Past runs</h3>
+        <span class="refresh" onclick="loadBulkTestRuns()">refresh</span>
+        <table id="bulkRunsTable">
+          <thead><tr><th>Time</th><th>TTS</th><th>LLM model</th><th>Scripts</th><th>Total cost</th><th>Avg latency</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="empty" id="bulkRunsEmpty" style="display:none;">No bulk test runs yet.</div>
+      </div>
+    </main>
+</div>
+
+<script>
+  let appInitialized = false;
+  function initApp() {
+    if (appInitialized) return;
+    appInitialized = true;
+
+  const pageTitle = document.getElementById('pageTitle');
+  const pageSub = document.getElementById('pageSub');
+
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+      pageTitle.textContent = tab.dataset.title;
+      pageSub.textContent = tab.dataset.sub;
+      if (tab.dataset.tab === 'logs') loadLogs();
+      if (tab.dataset.tab === 'dnc') loadDnc();
+      if (tab.dataset.tab === 'script') loadScript();
+      if (tab.dataset.tab === 'contacts') loadContacts();
+      if (tab.dataset.tab === 'analytics') loadAnalytics();
+      if (tab.dataset.tab === 'settings') { loadTtsConfig(); loadAppConfig(); loadTelephonyConfig(); }
+      if (tab.dataset.tab === 'costs') loadCosts();
+      if (tab.dataset.tab === 'bulktest') loadBulkTestRuns();
+    });
+  });
+
+  const sessionId = 'admin-' + Math.random().toString(36).slice(2);
+
+  const voiceChat = document.getElementById('voiceChat');
+  const recordBtn = document.getElementById('recordBtn');
+  const voiceIdle = document.getElementById('voiceIdle');
+  const voiceActive = document.getElementById('voiceActive');
+  const voiceStartBtn = document.getElementById('voiceStartBtn');
+  const voiceEndBtn = document.getElementById('voiceEndBtn');
+  let mediaRecorder, audioChunks = [], voiceStarted = false;
+
+  function addVoiceMsg(role, text) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.innerHTML = role === 'status' ? '<span class="status">' + text + '</span>' : '<b>' + (role === 'agent' ? 'Agent' : 'You') + '</b>' + text;
+    voiceChat.appendChild(div);
+    voiceChat.scrollTop = voiceChat.scrollHeight;
+  }
+
+  function playAudio(base64) {
+    const audio = new Audio('data:audio/mpeg;base64,' + base64);
+    audio.play();
+  }
+
+  // Only ever runs when the admin explicitly clicks "Start test call" -
+  // this hits the real LLM + TTS pipeline, so it should never fire just
+  // from opening this tab or loading the page.
+  async function voiceStart() {
+    voiceIdle.style.display = 'none';
+    voiceActive.style.display = 'block';
+    voiceChat.innerHTML = '';
+    addVoiceMsg('status', 'calling...');
+    recordBtn.disabled = true;
+    try {
+      const res = await fetch('/admin/voice-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId }),
+      });
+      const data = await res.json();
+      voiceChat.innerHTML = '';
+      if (data.error) { addVoiceMsg('status', 'Error: ' + data.error); return; }
+      addVoiceMsg('agent', data.reply);
+      playAudio(data.audio);
+      voiceStarted = true;
+    } catch (err) {
+      addVoiceMsg('status', 'Error: ' + err.message);
+    } finally {
+      recordBtn.disabled = false;
+    }
+  }
+
+  function voiceEnd() {
+    voiceStarted = false;
+    voiceChat.innerHTML = '';
+    voiceActive.style.display = 'none';
+    voiceIdle.style.display = 'block';
+  }
+
+  voiceStartBtn.addEventListener('click', voiceStart);
+  voiceEndBtn.addEventListener('click', voiceEnd);
+
+  async function startRecording() {
+    if (!voiceStarted) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunks = [];
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+        addVoiceMsg('caller', '(listening...)');
+        recordBtn.disabled = true;
+        try {
+          const res = await fetch('/admin/voice-chat?sessionId=' + sessionId, {
+            method: 'POST',
+            headers: { 'Content-Type': blob.type },
+            body: blob,
+          });
+          const data = await res.json();
+          voiceChat.lastChild.remove();
+          if (data.error) { addVoiceMsg('status', 'Error: ' + data.error); return; }
+          addVoiceMsg('caller', data.transcript);
+          addVoiceMsg('agent', data.reply);
+          playAudio(data.audio);
+        } catch (err) {
+          addVoiceMsg('status', 'Error: ' + err.message);
+        } finally {
+          recordBtn.disabled = false;
+        }
+      };
+      mediaRecorder.start();
+      recordBtn.classList.add('recording');
+      recordBtn.textContent = 'Recording... release to send';
+    } catch (err) {
+      addVoiceMsg('status', 'Mic access error: ' + err.message);
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+    }
+    recordBtn.classList.remove('recording');
+    recordBtn.textContent = 'Hold to talk';
+  }
+
+  recordBtn.addEventListener('mousedown', startRecording);
+  recordBtn.addEventListener('mouseup', stopRecording);
+  recordBtn.addEventListener('mouseleave', () => { if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording(); });
+  recordBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+  recordBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
+
+  const textChat = document.getElementById('textChat');
+  const textForm = document.getElementById('textForm');
+  const textInput = document.getElementById('textInput');
+  const textIdle = document.getElementById('textIdle');
+  const textActive = document.getElementById('textActive');
+  const textStartBtn = document.getElementById('textStartBtn');
+  const textEndBtn = document.getElementById('textEndBtn');
+  let textSessionId = null;
+
+  function addTextMsg(role, text) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.innerHTML = '<b>' + (role === 'agent' ? 'Agent' : 'You') + '</b>' + text;
+    textChat.appendChild(div);
+    textChat.scrollTop = textChat.scrollHeight;
+  }
+
+  // Only ever runs when the admin explicitly clicks "Start test chat" -
+  // this hits the real LLM pipeline, so it should never fire just from
+  // opening this tab or loading the page.
+  async function textStart() {
+    textSessionId = 'admin-text-' + Math.random().toString(36).slice(2);
+    textIdle.style.display = 'none';
+    textActive.style.display = 'block';
+    textChat.innerHTML = '';
+    const res = await fetch('/test/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: textSessionId }),
+    });
+    const data = await res.json();
+    if (data.error) { addTextMsg('agent', 'Error: ' + data.error); return; }
+    addTextMsg('agent', data.reply);
+  }
+
+  function textEnd() {
+    textSessionId = null;
+    textChat.innerHTML = '';
+    textActive.style.display = 'none';
+    textIdle.style.display = 'block';
+  }
+
+  textStartBtn.addEventListener('click', textStart);
+  textEndBtn.addEventListener('click', textEnd);
+
+  textForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!textSessionId) return;
+    const message = textInput.value.trim();
+    if (!message) return;
+    addTextMsg('caller', message);
+    textInput.value = '';
+    const res = await fetch('/test/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: textSessionId, message }),
+    });
+    const data = await res.json();
+    if (data.error) { addTextMsg('agent', 'Error: ' + data.error); return; }
+    addTextMsg('agent', data.reply);
+  });
+
+  async function loadLogs() {
+    const res = await fetch('/logs');
+    const events = await res.json();
+    const tbody = document.querySelector('#logsTable tbody');
+    tbody.innerHTML = '';
+    document.getElementById('logsEmpty').style.display = events.length ? 'none' : 'block';
+    events.forEach((e) => {
+      const tr = document.createElement('tr');
+      const outcomeHtml = e.outcome ? '<span class="outcome ' + e.outcome + '">' + e.outcome + '</span>' : '';
+      tr.innerHTML =
+        '<td>' + new Date(e.ts).toLocaleString() + '</td>' +
+        '<td>' + e.event + '</td>' +
+        '<td>' + (e.to || e.to_number || '') + '</td>' +
+        '<td>' + outcomeHtml + '</td>';
+      tbody.appendChild(tr);
+    });
+  }
+
+  async function loadDnc() {
+    const res = await fetch('/dnc');
+    const entries = await res.json();
+    const tbody = document.querySelector('#dncTable tbody');
+    tbody.innerHTML = '';
+    document.getElementById('dncEmpty').style.display = entries.length ? 'none' : 'block';
+    entries.forEach((e) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + e.phone_number + '</td>' +
+        '<td>' + (e.reason || '') + '</td>' +
+        '<td>' + new Date(e.added_at).toLocaleString() + '</td>';
+      tbody.appendChild(tr);
+    });
+  }
+
+  document.getElementById('dncForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    await fetch('/dnc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: form.to.value, reason: form.reason.value }),
+    });
+    form.reset();
+    loadDnc();
+  });
+
+  const scriptEditor = document.getElementById('scriptEditor');
+  const scriptStatus = document.getElementById('scriptStatus');
+  const openingEditor = document.getElementById('openingEditor');
+  const openingStatus = document.getElementById('openingStatus');
+
+  async function loadScript() {
+    const results = await Promise.allSettled([fetch('/admin/script'), fetch('/admin/opening')]);
+
+    const [scriptResult, openingResult] = results;
+    if (scriptResult.status === 'fulfilled' && scriptResult.value.ok) {
+      const scriptData = await scriptResult.value.json();
+      scriptEditor.value = scriptData.prompt || '';
+      scriptStatus.textContent = scriptData.prompt
+        ? (scriptData.isDefault ? '(default script)' : '(edited)')
+        : '(server returned an empty script - check server logs)';
+    } else {
+      scriptStatus.textContent = 'Error loading script - is the server reachable?';
+    }
+
+    if (openingResult.status === 'fulfilled' && openingResult.value.ok) {
+      const openingData = await openingResult.value.json();
+      openingEditor.value = openingData.template || '';
+      openingStatus.textContent = openingData.template
+        ? (openingData.isDefault ? '(default)' : '(edited)')
+        : '(server returned an empty template - check server logs)';
+    } else {
+      openingStatus.textContent = 'Error loading opening line - is the server reachable?';
+    }
+  }
+
+  document.getElementById('scriptSaveBtn').addEventListener('click', async () => {
+    scriptStatus.textContent = 'saving...';
+    const res = await fetch('/admin/script', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: scriptEditor.value }),
+    });
+    scriptStatus.textContent = res.ok ? 'saved' : 'error saving';
+    setTimeout(() => { if (scriptStatus.textContent === 'saved') scriptStatus.textContent = '(edited)'; }, 1500);
+  });
+
+  document.getElementById('scriptResetBtn').addEventListener('click', async () => {
+    if (!confirm('Reset the script to the built-in default? This overwrites your edits.')) return;
+    const res = await fetch('/admin/script/reset', { method: 'POST' });
+    const data = await res.json();
+    scriptEditor.value = data.prompt;
+    scriptStatus.textContent = '(default script)';
+  });
+
+  document.getElementById('openingSaveBtn').addEventListener('click', async () => {
+    openingStatus.textContent = 'saving...';
+    const res = await fetch('/admin/opening', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template: openingEditor.value }),
+    });
+    openingStatus.textContent = res.ok ? 'saved' : 'error saving';
+    setTimeout(() => { if (openingStatus.textContent === 'saved') openingStatus.textContent = '(edited)'; }, 1500);
+  });
+
+  document.getElementById('openingResetBtn').addEventListener('click', async () => {
+    if (!confirm('Reset the opening line to the built-in default? This overwrites your edits.')) return;
+    const res = await fetch('/admin/opening/reset', { method: 'POST' });
+    const data = await res.json();
+    openingEditor.value = data.template;
+    openingStatus.textContent = '(default)';
+  });
+
+  async function loadContacts() {
+    const res = await fetch('/admin/contacts');
+    const contacts = await res.json();
+    const tbody = document.querySelector('#contactsTable tbody');
+    tbody.innerHTML = '';
+    document.getElementById('contactsEmpty').style.display = contacts.length ? 'none' : 'block';
+    contacts.forEach((c) => {
+      const tr = document.createElement('tr');
+      const outcomeHtml = c.lastOutcome ? '<span class="outcome ' + c.lastOutcome + '">' + c.lastOutcome + '</span>' : '';
+      tr.innerHTML =
+        '<td>' + c.phone + '</td>' +
+        '<td>' + (c.name || '') + '</td>' +
+        '<td>' + (c.company || '') + '</td>' +
+        '<td>' + c.timesCalled + '</td>' +
+        '<td>' + outcomeHtml + '</td>' +
+        '<td><button class="call-btn" data-phone="' + c.phone + '">Call</button></td>';
+      tbody.appendChild(tr);
+    });
+  }
+
+  const campaignStatusLine = document.getElementById('campaignStatusLine');
+  const campaignStartBtn = document.getElementById('campaignStartBtn');
+  const campaignStopBtn = document.getElementById('campaignStopBtn');
+  let campaignPollTimer = null;
+
+  async function refreshCampaignStatus() {
+    try {
+      const res = await fetch('/admin/campaign/status');
+      const s = await res.json();
+      if (s.active) {
+        campaignStartBtn.style.display = 'none';
+        campaignStopBtn.style.display = 'inline-block';
+        campaignStatusLine.textContent =
+          'Running - ' + s.inFlight + '/' + s.maxConcurrentCalls + ' calls in flight, ' +
+          s.queued + ' queued, ' + s.dialedCount + ' dialed so far.';
+        if (!campaignPollTimer) campaignPollTimer = setInterval(refreshCampaignStatus, 4000);
+      } else {
+        campaignStartBtn.style.display = 'inline-block';
+        campaignStopBtn.style.display = 'none';
+        clearInterval(campaignPollTimer);
+        campaignPollTimer = null;
+        campaignStatusLine.textContent = s.dialedCount > 0
+          ? 'Finished - ' + s.dialedCount + ' dialed, ' + s.skippedCount + ' skipped.'
+          : 'Idle.';
+        if (s.finishedAt) loadContacts(); // pick up updated "Called"/outcome columns
+      }
+    } catch (err) {
+      campaignStatusLine.textContent = 'Error checking status: ' + err.message;
+    }
+  }
+
+  campaignStartBtn.addEventListener('click', async () => {
+    const includeAlreadyCalled = document.getElementById('campaignIncludeCalled').checked;
+    campaignStartBtn.disabled = true;
+    try {
+      const res = await fetch('/admin/campaign/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ includeAlreadyCalled }),
+      });
+      const data = await res.json();
+      if (data.error) { alert('Error: ' + data.error); return; }
+      refreshCampaignStatus();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      campaignStartBtn.disabled = false;
+    }
+  });
+
+  campaignStopBtn.addEventListener('click', async () => {
+    await fetch('/admin/campaign/stop', { method: 'POST' });
+    refreshCampaignStatus();
+  });
+
+  refreshCampaignStatus();
+
+  document.getElementById('importBtn').addEventListener('click', async () => {
+    const fileInput = document.getElementById('importFile');
+    const status = document.getElementById('importStatus');
+    if (!fileInput.files.length) { status.textContent = 'choose a file first'; return; }
+    const file = fileInput.files[0];
+    status.textContent = 'importing...';
+    try {
+      const res = await fetch('/admin/contacts/import?filename=' + encodeURIComponent(file.name), {
+        method: 'POST',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      });
+      const data = await res.json();
+      if (data.error) { status.textContent = 'Error: ' + data.error; return; }
+      status.textContent = 'added ' + data.added + ', updated ' + data.updated + ' (total ' + data.total + ')';
+      fileInput.value = '';
+      loadContacts();
+    } catch (err) {
+      status.textContent = 'Error: ' + err.message;
+    }
+  });
+
+  async function clearContacts() {
+    if (!confirm('Remove all imported contacts? This does not affect call history or the DNC list.')) return;
+    await fetch('/admin/contacts', { method: 'DELETE' });
+    loadContacts();
+  }
+
+  document.querySelector('#contactsTable tbody').addEventListener('click', async (e) => {
+    if (!e.target.classList.contains('call-btn')) return;
+    const btn = e.target;
+    const phone = btn.dataset.phone;
+    btn.disabled = true;
+    btn.textContent = 'Calling...';
+    try {
+      let res = await fetch('/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: phone }),
+      });
+      let data = await res.json();
+      if (res.status === 409 && data.alreadyCalled) {
+        const last = data.history[0];
+        const when = last ? new Date(last.ts).toLocaleString() : 'previously';
+        const outcome = data.history.find((h) => h.outcome)?.outcome || 'unknown outcome';
+        const ok = confirm('Already called ' + phone + ' on ' + when + ' (' + outcome + '). Call again?');
+        if (!ok) { btn.disabled = false; btn.textContent = 'Call'; return; }
+        res = await fetch('/call', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: phone, forceCall: true }),
+        });
+        data = await res.json();
+      }
+      if (data.error) { alert('Error: ' + data.error); }
+      else { alert('Calling ' + phone + '...'); }
+    } catch (err) {
+      alert('Error: ' + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Call';
+      loadContacts();
+    }
+  });
+
+  async function loadAnalytics() {
+    const res = await fetch('/admin/analytics');
+    const a = await res.json();
+
+    const statGrid = document.getElementById('statGrid');
+    statGrid.innerHTML = [
+      ['Calls initiated', a.totalCallsInitiated],
+      ['Completed', a.totalCompleted],
+      ['Voicemail rate', Math.round(a.voicemailRate * 100) + '%'],
+      ['On DNC list', a.dncCount],
+      ['Contacts', a.contactsCount],
+    ].map(([label, num]) => '<div class="statCard"><div class="num">' + num + '</div><div class="label">' + label + '</div></div>').join('');
+
+    const outcomeBars = document.getElementById('outcomeBars');
+    const outcomeEntries = Object.entries(a.outcomeCounts);
+    const maxOutcome = Math.max(1, ...outcomeEntries.map(([, n]) => n));
+    outcomeBars.innerHTML = outcomeEntries.length
+      ? outcomeEntries.map(([label, n]) =>
+          '<div class="barRow"><div class="barLabel">' + label + '</div>' +
+          '<div class="barTrack"><div class="barFill" style="width:' + (n / maxOutcome * 100) + '%"></div></div>' +
+          '<div class="barCount">' + n + '</div></div>'
+        ).join('')
+      : '<div class="empty">No completed calls yet.</div>';
+
+    const dayBars = document.getElementById('dayBars');
+    const dayEntries = Object.entries(a.callsPerDay);
+    const maxDay = Math.max(1, ...dayEntries.map(([, n]) => n));
+    dayBars.innerHTML = dayEntries.map(([day, n]) =>
+      '<div class="barRow"><div class="barLabel">' + day + '</div>' +
+      '<div class="barTrack"><div class="barFill" style="width:' + (n / maxDay * 100) + '%"></div></div>' +
+      '<div class="barCount">' + n + '</div></div>'
+    ).join('');
+  }
+
+  const providerTabButtons = document.querySelectorAll('.providerTabs button');
+  const telUnbuiltNote = document.getElementById('telUnbuiltNote');
+  let currentTelProvider = 'twilio';
+
+  function switchTelProvider(provider) {
+    currentTelProvider = provider;
+    providerTabButtons.forEach((b) => b.classList.toggle('active', b.dataset.provider === provider));
+    document.getElementById('telFields-twilio').classList.toggle('active', provider === 'twilio');
+    document.getElementById('telFields-telnyx').classList.toggle('active', provider === 'telnyx');
+    telUnbuiltNote.style.display = provider === 'telnyx' ? 'block' : 'none';
+  }
+
+  providerTabButtons.forEach((btn) => {
+    btn.addEventListener('click', () => switchTelProvider(btn.dataset.provider));
+  });
+
+  document.querySelectorAll('#settingsSubTabs button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#settingsSubTabs button').forEach((b) => b.classList.toggle('active', b === btn));
+      document.querySelectorAll('.settingsSubPanel').forEach((p) => p.classList.toggle('active', p.id === 'settingsSub-' + btn.dataset.subtab));
+    });
+  });
+
+  async function loadTelephonyConfig() {
+    try {
+      const res = await fetch('/admin/telephony-config');
+      if (!res.ok) throw new Error('request failed');
+      const data = await res.json();
+      const c = data.config;
+      switchTelProvider(c.provider || 'twilio');
+      document.getElementById('telTwilioSid').value = c.twilioAccountSid || '';
+      document.getElementById('telTwilioToken').value = c.twilioAuthToken || '';
+      document.getElementById('telTwilioNumber').value = c.twilioPhoneNumber || '';
+      document.getElementById('telTelnyxKey').value = c.telnyxApiKey || '';
+      document.getElementById('telTelnyxConnectionId').value = c.telnyxConnectionId || '';
+      document.getElementById('telTelnyxNumber').value = c.telnyxPhoneNumber || '';
+      document.getElementById('telStatus').textContent = data.isDefault ? '(using environment variables)' : '(edited)';
+    } catch (err) {
+      document.getElementById('telStatus').textContent = 'Error loading telephony config';
+    }
+  }
+
+  document.getElementById('telSaveBtn').addEventListener('click', async () => {
+    const status = document.getElementById('telStatus');
+    status.textContent = 'saving...';
+    try {
+      const res = await fetch('/admin/telephony-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: currentTelProvider,
+          twilioAccountSid: document.getElementById('telTwilioSid').value,
+          twilioAuthToken: document.getElementById('telTwilioToken').value,
+          twilioPhoneNumber: document.getElementById('telTwilioNumber').value,
+          telnyxApiKey: document.getElementById('telTelnyxKey').value,
+          telnyxConnectionId: document.getElementById('telTelnyxConnectionId').value,
+          telnyxPhoneNumber: document.getElementById('telTelnyxNumber').value,
+        }),
+      });
+      status.textContent = res.ok ? 'saved' : 'error saving';
+      setTimeout(() => { if (status.textContent === 'saved') status.textContent = '(edited)'; }, 1500);
+    } catch (err) {
+      status.textContent = 'Error: ' + err.message;
+    }
+  });
+
+  document.getElementById('telResetBtn').addEventListener('click', async () => {
+    if (!confirm('Clear saved telephony credentials and fall back to environment variables?')) return;
+    const res = await fetch('/admin/telephony-config/reset', { method: 'POST' });
+    const data = await res.json();
+    loadTelephonyConfig();
+  });
+
+  const ttsProvider = document.getElementById('ttsProvider');
+  const ttsModel = document.getElementById('ttsModel');
+  const ttsVoice = document.getElementById('ttsVoice');
+  const ttsBaseUrl = document.getElementById('ttsBaseUrl');
+  const ttsBaseUrlRow = document.getElementById('ttsBaseUrlRow');
+  const ttsStatus = document.getElementById('ttsStatus');
+
+  function updateBaseUrlVisibility() {
+    ttsBaseUrlRow.style.display = ttsProvider.value === 'self_hosted' ? 'block' : 'none';
+  }
+
+  async function loadTtsConfig() {
+    const res = await fetch('/admin/tts-config');
+    const data = await res.json();
+    ttsProvider.value = data.config.provider;
+    ttsModel.value = data.config.model;
+    ttsVoice.value = data.config.voice || '';
+    ttsBaseUrl.value = data.config.baseUrl || '';
+    updateBaseUrlVisibility();
+    ttsStatus.textContent = data.isDefault ? '(default)' : '(edited)';
+  }
+
+  document.getElementById('ttsSaveBtn').addEventListener('click', async () => {
+    ttsStatus.textContent = 'saving...';
+    const res = await fetch('/admin/tts-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: ttsProvider.value,
+        model: ttsModel.value,
+        voice: ttsVoice.value || null,
+        baseUrl: ttsProvider.value === 'self_hosted' ? ttsBaseUrl.value : null,
+      }),
+    });
+    ttsStatus.textContent = res.ok ? 'saved' : 'error saving';
+    setTimeout(() => { if (ttsStatus.textContent === 'saved') ttsStatus.textContent = '(edited)'; }, 1500);
+  });
+
+  document.getElementById('ttsResetBtn').addEventListener('click', async () => {
+    if (!confirm('Reset the live-call TTS provider to Deepgram Aura (the default)?')) return;
+    const res = await fetch('/admin/tts-config/reset', { method: 'POST' });
+    const data = await res.json();
+    ttsProvider.value = data.config.provider;
+    ttsModel.value = data.config.model;
+    ttsVoice.value = data.config.voice || '';
+    ttsBaseUrl.value = '';
+    updateBaseUrlVisibility();
+    ttsStatus.textContent = '(default)';
+  });
+
+  ttsProvider.addEventListener('change', () => {
+    updateBaseUrlVisibility();
+    if (ttsProvider.value === 'deepgram' && !ttsModel.value.startsWith('aura')) {
+      ttsModel.value = 'aura-asteria-en';
+      ttsVoice.value = '';
+    } else if (ttsProvider.value === 'openrouter' && ttsModel.value.startsWith('aura')) {
+      ttsModel.value = 'hexgrad/kokoro-82m';
+    } else if (ttsProvider.value === 'self_hosted' && !ttsModel.value) {
+      ttsModel.value = 'kokoro';
+    }
+  });
+
+  const cfgMaxConcurrent = document.getElementById('cfgMaxConcurrent');
+  const cfgCallHoursTz = document.getElementById('cfgCallHoursTz');
+  const cfgCallHoursStart = document.getElementById('cfgCallHoursStart');
+  const cfgCallHoursEnd = document.getElementById('cfgCallHoursEnd');
+  const cfgLlmModel = document.getElementById('cfgLlmModel');
+  const cfgClassifierModel = document.getElementById('cfgClassifierModel');
+  const cfgUtteranceEndMs = document.getElementById('cfgUtteranceEndMs');
+  const cfgStatus = document.getElementById('cfgStatus');
+
+  function fillAppConfigForm(c) {
+    cfgMaxConcurrent.value = c.maxConcurrentCalls;
+    cfgCallHoursTz.value = c.callHoursTz;
+    cfgCallHoursStart.value = c.callHoursStart;
+    cfgCallHoursEnd.value = c.callHoursEnd;
+    cfgLlmModel.value = c.openRouterModel;
+    cfgClassifierModel.value = c.classifierModel;
+    cfgUtteranceEndMs.value = c.utteranceEndMs;
+  }
+
+  async function loadAppConfig() {
+    try {
+      const res = await fetch('/admin/app-config');
+      if (!res.ok) throw new Error('request failed');
+      const data = await res.json();
+      fillAppConfigForm(data.config);
+      cfgStatus.textContent = data.isDefault ? '(default)' : '(edited)';
+    } catch (err) {
+      cfgStatus.textContent = 'Error loading settings - is the server reachable?';
+    }
+  }
+
+  document.getElementById('cfgSaveBtn').addEventListener('click', async () => {
+    cfgStatus.textContent = 'saving...';
+    try {
+      const res = await fetch('/admin/app-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          maxConcurrentCalls: cfgMaxConcurrent.value,
+          callHoursTz: cfgCallHoursTz.value,
+          callHoursStart: cfgCallHoursStart.value,
+          callHoursEnd: cfgCallHoursEnd.value,
+          openRouterModel: cfgLlmModel.value,
+          classifierModel: cfgClassifierModel.value,
+          utteranceEndMs: cfgUtteranceEndMs.value,
+        }),
+      });
+      cfgStatus.textContent = res.ok ? 'saved' : 'error saving';
+      setTimeout(() => { if (cfgStatus.textContent === 'saved') cfgStatus.textContent = '(edited)'; }, 1500);
+    } catch (err) {
+      cfgStatus.textContent = 'Error: ' + err.message;
+    }
+  });
+
+  document.getElementById('cfgResetBtn').addEventListener('click', async () => {
+    if (!confirm('Reset general settings to defaults (from environment variables)?')) return;
+    const res = await fetch('/admin/app-config/reset', { method: 'POST' });
+    const data = await res.json();
+    fillAppConfigForm(data.config);
+    cfgStatus.textContent = '(default)';
+  });
+
+  const cfgTransferNumber = document.getElementById('cfgTransferNumber');
+  const cfgTransferKeywords = document.getElementById('cfgTransferKeywords');
+  const transferStatus = document.getElementById('transferStatus');
+
+  async function loadTransferConfig() {
+    try {
+      const res = await fetch('/admin/transfer');
+      const data = await res.json();
+      cfgTransferNumber.value = data.transferNumber || '';
+      cfgTransferKeywords.value = (data.transferKeywords || []).join(', ');
+    } catch (err) {
+      transferStatus.textContent = 'Error loading transfer settings';
+    }
+  }
+
+  document.getElementById('transferSaveBtn').addEventListener('click', async () => {
+    transferStatus.textContent = 'saving...';
+    try {
+      const keywords = cfgTransferKeywords.value.split(',').map((k) => k.trim()).filter(Boolean);
+      const res = await fetch('/admin/transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transferNumber: cfgTransferNumber.value.trim(), transferKeywords: keywords }),
+      });
+      transferStatus.textContent = res.ok ? 'saved' : 'error saving';
+      setTimeout(() => { if (transferStatus.textContent === 'saved') transferStatus.textContent = ''; }, 1500);
+    } catch (err) {
+      transferStatus.textContent = 'Error: ' + err.message;
+    }
+  });
+  loadTransferConfig();
+
+  function formatCost(n) {
+    if (n == null) return '—';
+    return n < 0.01 ? '$' + n.toFixed(5) : '$' + n.toFixed(4);
+  }
+
+  async function loadCosts() {
+    const [summaryRes, logsRes] = await Promise.all([fetch('/admin/cost-summary'), fetch('/admin/request-logs')]);
+    const summary = await summaryRes.json();
+    const logs = await logsRes.json();
+
+    const costStatGrid = document.getElementById('costStatGrid');
+    costStatGrid.innerHTML = [
+      ['Total cost (est.)', formatCost(summary.grandTotalCost)],
+      ['Total requests', summary.totalRequests],
+    ].map(([label, num]) => '<div class="statCard"><div class="num">' + num + '</div><div class="label">' + label + '</div></div>').join('');
+
+    const costTbody = document.querySelector('#costTable tbody');
+    costTbody.innerHTML = summary.rows.map((r) =>
+      '<tr><td>' + r.type + '</td><td>' + (r.provider || '') + '</td><td>' + r.model + '</td>' +
+      '<td>' + r.requests + '</td><td>' + r.avgLatencyMs + 'ms</td><td>' + formatCost(r.totalCost) + '</td></tr>'
+    ).join('');
+
+    const logTbody = document.querySelector('#requestLogTable tbody');
+    logTbody.innerHTML = logs.slice(0, 50).map((l) =>
+      '<tr><td>' + new Date(l.ts).toLocaleTimeString() + '</td><td>' + l.type + '</td>' +
+      '<td>' + l.model + '</td><td>' + (l.durationMs || 0) + 'ms</td><td>' + formatCost(l.estimatedCost) + '</td></tr>'
+    ).join('');
+
+    document.getElementById('costsEmpty').style.display = logs.length ? 'none' : 'block';
+  }
+
+  function formatCost2(n) {
+    if (n == null) return '—';
+    return n < 0.01 ? '$' + n.toFixed(5) : '$' + n.toFixed(4);
+  }
+
+  document.getElementById('bulkRunBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('bulkRunBtn');
+    const status = document.getElementById('bulkStatus');
+    const repeats = parseInt(document.getElementById('bulkRepeats').value, 10) || 1;
+    btn.disabled = true;
+    status.textContent = 'running ' + repeats + ' pass(es) through 5 scripts - this takes a bit and costs real API usage...';
+
+    try {
+      const res = await fetch('/admin/bulk-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repeats }),
+      });
+      const data = await res.json();
+      if (data.error) { status.textContent = 'Error: ' + data.error; return; }
+
+      status.textContent = 'done';
+      const s = data.summary;
+      const byTypeHtml = Object.entries(s.byType).map(([type, v]) =>
+        '<div class="statCard"><div class="num">' + formatCost2(v.cost) + '</div><div class="label">' + type + ' (' + v.requests + ' req)</div></div>'
+      ).join('');
+      const costNote = s.unknownCostRequests > 0
+        ? ' <span style="color:var(--bad-ink); font-weight:400; font-size:11px;">(' + s.unknownCostRequests + ' request(s) used a model not in the pricing table - this total is a floor, not the real cost)</span>'
+        : '';
+      document.getElementById('bulkLatestResult').innerHTML =
+        '<h3 class="sectionTitle" style="margin-top:0;">Latest run — ' + s.ttsConfig.provider + '/' + s.ttsConfig.model + ', ' + s.llmModel + '</h3>' +
+        '<div class="statGrid">' +
+        '<div class="statCard"><div class="num">' + formatCost2(s.totalCost) + '</div><div class="label">Total cost' + costNote + '</div></div>' +
+        '<div class="statCard"><div class="num">' + s.avgLatencyMs + 'ms</div><div class="label">Avg latency/request</div></div>' +
+        '<div class="statCard"><div class="num">' + s.scriptsRun + '</div><div class="label">Scripts run</div></div>' +
+        byTypeHtml + '</div>' +
+        '<audio controls src="/bulk-test-samples/' + s.runId + '.wav" style="width:100%; margin-top:12px;"></audio>';
+
+      loadBulkTestRuns();
+    } catch (err) {
+      status.textContent = 'Error: ' + err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function loadBulkTestRuns() {
+    const res = await fetch('/admin/bulk-test-runs');
+    const runs = await res.json();
+    const tbody = document.querySelector('#bulkRunsTable tbody');
+    tbody.innerHTML = '';
+    document.getElementById('bulkRunsEmpty').style.display = runs.length ? 'none' : 'block';
+    runs.forEach((r) => {
+      const tr = document.createElement('tr');
+      const costDisplay = formatCost2(r.totalCost) + (r.unknownCostRequests > 0 ? ' *' : '');
+      tr.innerHTML =
+        '<td>' + new Date(r.ts).toLocaleString() + '</td>' +
+        '<td>' + r.ttsConfig.provider + '/' + r.ttsConfig.model + '</td>' +
+        '<td>' + r.llmModel + '</td>' +
+        '<td>' + r.scriptsRun + '</td>' +
+        '<td title="' + (r.unknownCostRequests > 0 ? r.unknownCostRequests + ' request(s) used an unpriced model - this is a floor, not the real total' : '') + '">' + costDisplay + '</td>' +
+        '<td>' + r.avgLatencyMs + 'ms</td>';
+      tbody.appendChild(tr);
+    });
+  }
+
+  }
+
+  initApp();
+</script>
+</body>
+</html>
+

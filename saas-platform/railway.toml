@@ -1,0 +1,14 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/api/health"
+healthcheckTimeout = 100
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+# Next.js in standard (non-standalone) mode is stateless per request aside
+# from iron-session cookies, which are self-contained (not server-side
+# session storage) - safe to run more than one replica here whenever
+# that's worth the cost, unlike the other two services.
+numReplicas = 1

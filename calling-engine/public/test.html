@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>PinkTree Voice Agent - Script Test</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 18px; }
+  #chat { border: 1px solid #ddd; border-radius: 8px; padding: 12px; height: 420px; overflow-y: auto; margin-bottom: 12px; background: #fafafa; }
+  .msg { margin: 8px 0; line-height: 1.4; }
+  .agent { color: #0a4; }
+  .agent b { color: #063; }
+  .caller { color: #333; }
+  .caller b { color: #06c; }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; padding: 10px; font-size: 14px; }
+  button { padding: 10px 16px; font-size: 14px; cursor: pointer; }
+  #restart { font-size: 12px; color: #888; cursor: pointer; text-decoration: underline; }
+</style>
+</head>
+<body>
+  <h1>PinkTree Voice Agent — script test (no phone call)</h1>
+  <p style="color:#888; font-size: 13px;">
+    Play the part of the person being called. This runs the exact same
+    prompt/logic as a live call, minus the phone.
+    <span id="restart">restart</span>
+  </p>
+  <div id="chat"></div>
+  <form id="form">
+    <input id="input" autocomplete="off" placeholder="Type your reply as the callee..." />
+    <button type="submit">Send</button>
+  </form>
+
+<script>
+  const chat = document.getElementById('chat');
+  const form = document.getElementById('form');
+  const input = document.getElementById('input');
+  const sessionId = 'test-' + Math.random().toString(36).slice(2);
+
+  function addMsg(role, text) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + (role === 'agent' ? 'agent' : 'caller');
+    div.innerHTML = '<b>' + (role === 'agent' ? 'Agent' : 'You') + ':</b> ' + text;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  async function start() {
+    chat.innerHTML = '';
+    addMsg('agent', '...calling...');
+    const res = await fetch('/test/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+    const data = await res.json();
+    chat.innerHTML = '';
+    if (data.error) { addMsg('agent', 'Error: ' + data.error); return; }
+    addMsg('agent', data.reply);
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const message = input.value.trim();
+    if (!message) return;
+    addMsg('caller', message);
+    input.value = '';
+    const res = await fetch('/test/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, message }),
+    });
+    const data = await res.json();
+    if (data.error) { addMsg('agent', 'Error: ' + data.error); return; }
+    addMsg('agent', data.reply);
+  });
+
+  document.getElementById('restart').addEventListener('click', start);
+  start();
+</script>
+</body>
+</html>

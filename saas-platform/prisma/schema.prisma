@@ -1,0 +1,401 @@
+// Shared data contract — table/field names here are fixed across all 3 project
+// tracks (calling engine, this SaaS platform, and the qualification/summarization
+// service). Do not rename or restructure these even if you'd design them
+// differently in isolation — see Project 2 build instructions.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Owned & written by this project (Project 2) ----------
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  plan      String   @default("trial")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  users               User[]
+  phoneNumbers        PhoneNumber[]
+  agents              Agent[]
+  knowledgeSources    KnowledgeSource[]
+  leads               Lead[]
+  campaigns           Campaign[]
+  calls               Call[]
+  appointments        Appointment[]
+  providerCredentials ProviderCredential[]
+  invites             Invite[]
+  dncNumbers          DncNumber[]
+
+  @@map("tenants")
+}
+
+enum UserRole {
+  owner
+  admin
+  member
+  platform_admin
+}
+
+model User {
+  id           String    @id @default(cuid())
+  tenantId     String    @map("tenant_id")
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  role         UserRole  @default(owner)
+  // Brute-force protection: track failed attempts and a temporary lockout,
+  // reset on any successful login. See loginAction in lib/actions/auth.ts.
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([tenantId])
+  @@map("users")
+}
+
+// ---------- Read by this project, written by Project 1 (calling engine) ----------
+
+model PhoneNumber {
+  id               String  @id @default(cuid())
+  tenantId         String  @map("tenant_id")
+  tenant           Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider         String // "telnyx" | "twilio"
+  e164Number       String  @map("e164_number")
+  assignedAgentId  String? @map("assigned_agent_id")
+
+  agents    Agent[]
+  campaigns Campaign[]
+  calls     Call[]
+
+  @@index([tenantId])
+  @@map("phone_numbers")
+}
+
+model Agent {
+  id                     String   @id @default(cuid())
+  tenantId               String   @map("tenant_id")
+  tenant                 Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                   String
+  description            String?
+  systemPrompt           String   @map("system_prompt") @db.Text
+  voiceId                String?  @map("voice_id")
+  // Not present in the original shared-contract listing, but section 3 of the
+  // build spec explicitly calls for "LLM/model selection" as a config field —
+  // added here since this project owns full Agent CRUD. Flag this addition to
+  // whoever owns the cross-session contract so Project 1's runtime picks it up
+  // when selecting which model to call.
+  llmModel               String?  @map("llm_model")
+  isEnabled              Boolean  @default(true) @map("is_enabled")
+  greetingMessage        String?  @map("greeting_message") @db.Text
+  closingMessage         String?  @map("closing_message") @db.Text
+  transferNumber         String?  @map("transfer_number")
+  transferConditions     String[] @map("transfer_conditions")
+  assignedPhoneNumberId  String?  @map("assigned_phone_number_id")
+  assignedPhoneNumber    PhoneNumber? @relation(fields: [assignedPhoneNumberId], references: [id])
+  knowledgeBaseId        String?  @map("knowledge_base_id")
+
+  knowledgeSources KnowledgeSource[]
+  campaigns        Campaign[]
+  calls            Call[]
+  appointments     Appointment[]
+
+  @@index([tenantId])
+  @@map("agents")
+}
+
+// ---------- Owned & written by this project; chunks/embeddings owned by Project 1 ----------
+
+model KnowledgeSource {
+  id         String   @id @default(cuid())
+  tenantId   String   @map("tenant_id")
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agentId    String   @map("agent_id")
+  agent      Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  type       String // "file" | "faq" | "text" | "url"
+  rawContent String?  @map("raw_content") @db.Text
+  sourceUrl  String?  @map("source_url")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  chunks KnowledgeChunk[]
+
+  @@index([tenantId])
+  @@index([agentId])
+  @@map("knowledge_sources")
+}
+
+// Written by Project 1 (chunking + embedding via pgvector) at ingestion time.
+// This project only reads it to show "processing" vs "indexed" status.
+model KnowledgeChunk {
+  id        String          @id @default(cuid())
+  sourceId  String          @map("source_id")
+  source    KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  tenantId  String          @map("tenant_id")
+  agentId   String          @map("agent_id")
+  chunkText String          @map("chunk_text") @db.Text
+  // embedding vector(384) via pgvector — Prisma has no native vector type,
+  // so this is left as Unsupported and managed by Project 1's ingestion code.
+  // Run the accompanying raw-SQL migration (see prisma/migrations/pgvector.sql)
+  // to add `embedding vector(384)` and the pgvector extension.
+  embedding Unsupported("vector(384)")?
+
+  @@index([sourceId])
+  @@map("knowledge_chunks")
+}
+
+// ---------- Owned & written by this project ----------
+
+model ProviderCredential {
+  id                   String   @id @default(cuid())
+  tenantId             String   @map("tenant_id")
+  tenant               Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider             String // "telnyx" | "twilio"
+  encryptedValue       String   @map("encrypted_value") @db.Text
+  encryptionKeyVersion Int      @map("encryption_key_version")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  @@unique([tenantId, provider])
+  @@index([tenantId])
+  @@map("provider_credentials")
+}
+
+model Lead {
+  id            String   @id @default(cuid())
+  tenantId      String   @map("tenant_id")
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  phone         String?
+  email         String?
+  name          String?
+  company       String?
+  customFields  Json?    @map("custom_fields")
+  status        String   @default("new")
+  tags          String[]
+  notes         Json[]   @default([]) // [{ authorUserId, text, createdAt }]
+  source        String?
+  campaignId    String?  @map("campaign_id")
+  campaign      Campaign? @relation(fields: [campaignId], references: [id])
+  // Written by Project 3 — read-only here
+  qualification Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  calls        Call[]
+  appointments Appointment[]
+
+  @@index([tenantId])
+  @@index([campaignId])
+  @@map("leads")
+}
+
+model Campaign {
+  id            String    @id @default(cuid())
+  tenantId      String    @map("tenant_id")
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name          String
+  agentId       String    @map("agent_id")
+  agent         Agent     @relation(fields: [agentId], references: [id])
+  phoneNumberId String    @map("phone_number_id")
+  phoneNumber   PhoneNumber @relation(fields: [phoneNumberId], references: [id])
+  status        String    @default("draft") // draft | scheduled | running | paused | completed
+  schedule      Json?
+  retryConfig   Json?     @map("retry_config")
+  leadIds       String[]  @map("lead_ids")
+  dialedCount   Int       @default(0) @map("dialed_count")
+  skippedCount  Int       @default(0) @map("skipped_count")
+  startedAt     DateTime? @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+
+  leads Lead[]
+  calls Call[]
+
+  @@index([tenantId])
+  @@map("campaigns")
+}
+
+// ---------- Read-only here; written by Project 1 (call mechanics) and
+// Project 3 (summary/outcome/sentiment/extracted_info) ----------
+
+model Call {
+  id                String    @id @default(cuid())
+  tenantId          String    @map("tenant_id")
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leadId            String?   @map("lead_id")
+  lead              Lead?     @relation(fields: [leadId], references: [id])
+  campaignId        String?   @map("campaign_id")
+  campaign          Campaign? @relation(fields: [campaignId], references: [id])
+  agentId           String    @map("agent_id")
+  agent             Agent     @relation(fields: [agentId], references: [id])
+  phoneNumberId     String?   @map("phone_number_id")
+  phoneNumber       PhoneNumber? @relation(fields: [phoneNumberId], references: [id])
+  direction         String // "inbound" | "outbound"
+  status            String // "queued" | "in_progress" | "completed" | "failed" | "no_answer"
+  // Telephony-mechanics fields — added during platform integration. Project 1
+  // needs these to route provider status-webhooks back to the right row and
+  // for the call-history / "already called" checks; not in the original
+  // shared-contract listing, but required for the two calling-engine
+  // sessions (Project 1) to actually write into this table. Flagged here the
+  // same way Agent.llmModel was flagged when Project 2 added it.
+  provider          String?   // "twilio" | "telnyx"
+  providerCallId    String?   @map("provider_call_id") // Twilio CallSid / Telnyx call_control_id
+  fromNumber        String?   @map("from_number")
+  toNumber          String?   @map("to_number")
+  answeredBy        String?   @map("answered_by") // human | machine | fax | unknown, when AMD ran
+  transcriptReady   Boolean   @default(false) @map("transcript_ready") // flips true when call.ended fires
+  startedAt         DateTime? @map("started_at")
+  endedAt           DateTime? @map("ended_at")
+  durationSeconds   Int?      @map("duration_seconds")
+  recordingUrl      String?   @map("recording_url")
+  transcript        String?   @db.Text
+  summary           String?   @db.Text
+  outcome           String?
+  sentiment         String?
+  extractedInfo     Json?     @map("extracted_info")
+  transferTriggered Boolean   @default(false) @map("transfer_triggered")
+  transferReason    String?   @map("transfer_reason")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  appointments Appointment[]
+
+  @@index([tenantId])
+  @@index([leadId])
+  @@index([campaignId])
+  @@unique([provider, providerCallId])
+  @@map("calls")
+}
+
+// ---------- Owned & written by Project 1. Per-tenant now, not global — a
+// number blocked for one customer must not block another. ----------
+model DncNumber {
+  id          String   @id @default(cuid())
+  tenantId    String   @map("tenant_id")
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  phoneNumber String   @map("phone_number")
+  reason      String   @default("manual") // "manual" | "auto_detected" (caller said stop calling)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([tenantId, phoneNumber])
+  @@index([tenantId])
+  @@map("dnc_numbers")
+}
+
+// ---------- Read-only here; written by Project 3 ----------
+
+model Appointment {
+  id               String    @id @default(cuid())
+  tenantId         String    @map("tenant_id")
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leadId           String    @map("lead_id")
+  lead             Lead      @relation(fields: [leadId], references: [id])
+  callId           String?   @map("call_id")
+  call             Call?     @relation(fields: [callId], references: [id])
+  agentId          String    @map("agent_id")
+  agent            Agent     @relation(fields: [agentId], references: [id])
+  scheduledTime    DateTime  @map("scheduled_time")
+  status           String    @default("scheduled")
+  calendarEventId  String?   @map("calendar_event_id")
+  confirmationSent Boolean   @default(false) @map("confirmation_sent")
+
+  @@index([tenantId])
+  @@index([leadId])
+  @@map("appointments")
+}
+
+// ---------- Internal to this project only — not part of the shared contract,
+// so free to add/change without affecting Projects 1 or 3 ----------
+
+// Idempotency guard for the call.ended webhook calling-engine sends (see
+// src/app/api/webhooks/call-events/route.ts) — every delivery carries a
+// unique event_id from the sender; recording which ones have already been
+// processed means a retried webhook delivery can never double-run the LLM
+// pipeline or double-book an appointment. Previously lived in a standalone
+// "intelligence-service" with its own hand-maintained raw-SQL schema before
+// that service was folded into this project - see root README's
+// "Restructuring: three services down to two" for why.
+model ProcessedCallEvent {
+  eventId     String   @id @map("event_id")
+  callId      String?  @map("call_id")
+  processedAt DateTime @default(now()) @map("processed_at")
+
+  @@map("processed_call_events")
+}
+
+// Per-tenant calendar configuration for appointment booking. No settings UI
+// writes to this yet (flagged as a known gap below) - falls back to the
+// mock calendar provider when a tenant has no row here.
+model TenantCalendarConfig {
+  tenantId            String @id @map("tenant_id")
+  provider            String @default("mock") // "mock" | "google"
+  calendarId          String? @map("calendar_id")
+  timezone            String @default("UTC")
+  slotDurationMinutes Int    @default(30) @map("slot_duration_minutes")
+  businessHours       Json   @default("{\"start\":\"09:00\",\"end\":\"17:00\",\"days\":[1,2,3,4,5]}") @map("business_hours")
+
+  @@map("tenant_calendar_config")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// Team invites — the shared "users" table supports multiple accounts per
+// tenant with a role, but nothing in the build spec covered how a second
+// teammate actually gets an account. This closes that gap.
+model Invite {
+  id         String    @id @default(cuid())
+  tenantId   String    @map("tenant_id")
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email      String
+  role       UserRole  @default(member)
+  tokenHash  String    @unique @map("token_hash")
+  invitedBy  String?   @map("invited_by")
+  expiresAt  DateTime  @map("expires_at")
+  acceptedAt DateTime? @map("accepted_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([tenantId])
+  @@map("invites")
+}
+
+// Audit trail for sensitive platform-admin actions (deactivating a tenant,
+// changing system config). A real SaaS admin panel needs an accountability
+// record for these, separate from the day-to-day tenant data.
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorUserId String  @map("actor_user_id")
+  actorEmail String   @map("actor_email")
+  tenantId   String?  @map("tenant_id") // the tenant the action affected, if any
+  action     String
+  targetType String?  @map("target_type")
+  targetId   String?  @map("target_id")
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// Platform-wide config editable from the admin panel's "system/provider
+// configuration" section (build spec section 9) — a simple key/value store
+// rather than a rigid schema, so new settings don't need a migration.
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_settings")
+}

@@ -65,7 +65,7 @@ export async function createCampaignAction(formData: FormData) {
 /**
  * Starting a campaign wraps Project 1's dial-queue engine — this project
  * owns the configuration/monitoring surface, not the dialing logic itself.
- * Calls the calling-engine's tenant-scoped campaign endpoint, which loads
+ * Calls the calling-engine's tenant-scoped campaign endpoint, which loads and
  * the campaign's leads/agent/phone-number from this same database and
  * starts actually placing calls. The local status flip only happens after
  * that call confirms it accepted the campaign - so the UI never shows

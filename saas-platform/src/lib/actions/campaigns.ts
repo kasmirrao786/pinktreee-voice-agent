@@ -97,7 +97,8 @@ export async function startCampaignAction(campaignId: string) {
   const result = await callCallingEngine(`/tenants/${tenantId}/campaigns/${campaignId}/start`);
   if (!result.ok) {
     revalidatePath(`/campaigns/${campaignId}`);
-    return { error: result.error };
+    console.error(result.error);
+    return;
   }
   // The calling engine also writes status/startedAt directly (it needs to
   // update dialedCount/skippedCount as it runs regardless), but flipping
@@ -115,7 +116,8 @@ export async function pauseCampaignAction(campaignId: string) {
   const result = await callCallingEngine(`/tenants/${tenantId}/campaigns/${campaignId}/pause`);
   if (!result.ok) {
     revalidatePath(`/campaigns/${campaignId}`);
-    return { error: result.error };
+    console.error(result.error);
+    return;
   }
   await prisma.campaign.updateMany({ where: { id: campaignId, tenantId }, data: { status: "paused" } });
   revalidatePath(`/campaigns/${campaignId}`);
@@ -126,7 +128,8 @@ export async function stopCampaignAction(campaignId: string) {
   const result = await callCallingEngine(`/tenants/${tenantId}/campaigns/${campaignId}/stop`);
   if (!result.ok) {
     revalidatePath(`/campaigns/${campaignId}`);
-    return { error: result.error };
+    console.error(result.error);
+    return;
   }
   await prisma.campaign.updateMany({
     where: { id: campaignId, tenantId },

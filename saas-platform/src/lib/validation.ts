@@ -37,11 +37,11 @@ export const inviteSchema = z.object({
 export function parseForm<T extends z.ZodTypeAny>(
   schema: T,
   formData: FormData
-): { data: z.infer<T>; error?: undefined } | { data?: undefined; error: string } {
+): { success: true; data: z.infer<T> } | { success: false; error: string } {
   const raw = Object.fromEntries(formData.entries());
   const result = schema.safeParse(raw);
   if (!result.success) {
-    return { error: result.error.issues[0]?.message || "Invalid input." };
+    return { success: false, error: result.error.issues[0]?.message || "Invalid input." };
   }
-  return { data: result.data };
+  return { success: true, data: result.data };
 }

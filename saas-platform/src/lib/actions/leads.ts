@@ -55,7 +55,7 @@ export async function addLeadNoteAction(leadId: string, formData: FormData) {
   const notes = Array.isArray(lead.notes) ? lead.notes : [];
   notes.push({ author: email, text, createdAt: new Date().toISOString() });
 
-  await prisma.lead.update({ where: { id: leadId }, data: { notes } });
+  await prisma.lead.update({ where: { id: leadId }, data: { notes: notes as Prisma.InputJsonValue[] } });
   revalidatePath(`/leads/${leadId}`);
 }
 

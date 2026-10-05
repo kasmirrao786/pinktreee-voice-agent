@@ -115,4 +115,4 @@ export async function deleteKnowledgeSourceAction(agentId: string, sourceId: str
   revalidatePath(`/agents/${agentId}`);
 }
 
-export { STORAGE_ROOT };
+const STORAGE_ROOT = path.join(process.cwd(), "storage", "knowledge");

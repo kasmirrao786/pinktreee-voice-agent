@@ -1,5 +1,5 @@
 "use server";
-
+import { Prisma } from "@prisma/client";
 import { parse } from "csv-parse/sync";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";

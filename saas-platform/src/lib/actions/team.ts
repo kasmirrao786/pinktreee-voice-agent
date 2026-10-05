@@ -23,7 +23,7 @@ export async function inviteTeammateAction(_prev: TeamFormState, formData: FormD
   assertRole(actingRole, ["owner", "admin"]);
 
   const parsed = parseForm(inviteSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.success) return { error: parsed.error };
   const { email, role } = parsed.data;
 
   // Only an owner can grant admin — an admin inviting someone can only add members.

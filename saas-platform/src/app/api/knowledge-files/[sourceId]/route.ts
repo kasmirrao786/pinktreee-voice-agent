@@ -3,7 +3,9 @@ import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/session";
-import { STORAGE_ROOT } from "@/lib/actions/knowledge";
+import path from "path";
+
+const STORAGE_ROOT = path.join(process.cwd(), "storage", "knowledge");
 
 // Streams an uploaded knowledge-base file back to the browser only if the
 // requesting session's tenant matches the source's tenant — this is what

@@ -20,7 +20,7 @@ export async function createAgentAction(_prev: AgentFormState, formData: FormDat
   assertRole(role, ["owner", "admin"]);
 
   const parsed = parseForm(agentSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.success) return { error: parsed.error };
   const { name, systemPrompt, description, voiceId, llmModel, greetingMessage, closingMessage, transferNumber } = parsed.data;
 
   const agent = await prisma.agent.create({
@@ -49,7 +49,7 @@ export async function updateAgentAction(agentId: string, _prev: AgentFormState, 
   assertRole(role, ["owner", "admin"]);
 
   const parsed = parseForm(agentSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.success) return { error: parsed.error };
   const { name, systemPrompt, description, voiceId, llmModel, greetingMessage, closingMessage, transferNumber } = parsed.data;
 
   // Tenant-scoped update: the where clause requires both id AND tenantId to

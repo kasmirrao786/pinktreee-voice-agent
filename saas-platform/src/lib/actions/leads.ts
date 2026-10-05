@@ -12,7 +12,7 @@ export async function createLeadAction(_prev: LeadFormState, formData: FormData)
   const { tenantId } = await requireSession();
 
   const parsed = parseForm(leadSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.success) return { error: parsed.error };
   const { name, phone, email, company } = parsed.data;
 
   await prisma.lead.create({

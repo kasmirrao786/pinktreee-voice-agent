@@ -11,7 +11,7 @@ export type FormState = { error?: string; success?: string } | undefined;
 
 export async function registerAction(_prev: FormState, formData: FormData): Promise<FormState> {
   const parsed = parseForm(registerSchema, formData);
-  if (parsed.error) return { error: parsed.error };
+  if (!parsed.success) return { error: parsed.error };
   const { companyName, email, password } = parsed.data;
 
   const existing = await prisma.user.findUnique({ where: { email } });
